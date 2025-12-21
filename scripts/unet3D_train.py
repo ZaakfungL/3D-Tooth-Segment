@@ -39,7 +39,6 @@ def train_baseline():
     ROI_SIZE = (96, 96, 96) # Patch 大小
     
     # 显存/内存优化配置
-    AMP = True              # 开启混合精度
     NUM_WORKERS = 2         # WSL建议设为2或0
     CACHE_RATE = 0.0        # 设为0.0防止内存溢出
     
@@ -92,7 +91,6 @@ def train_baseline():
     loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     dice_metric = DiceMetric(include_background=False, reduction="mean")
-    scaler = torch.cuda.amp.GradScaler() if AMP else None
 
     # ================= 4. 训练循环 =================
     best_metric = -1
@@ -113,18 +111,10 @@ def train_baseline():
 
             optimizer.zero_grad()
             
-            if AMP:
-                with torch.cuda.amp.autocast():
-                    outputs = model(inputs)
-                    loss = loss_function(outputs, labels)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                outputs = model(inputs)
-                loss = loss_function(outputs, labels)
-                loss.backward()
-                optimizer.step()
+            outputs = model(inputs)
+            loss = loss_function(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
             epoch_loss += loss.item()
         

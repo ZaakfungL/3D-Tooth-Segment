@@ -50,7 +50,6 @@ def search_baseline():
     LR_ARCH = 3e-4         
     
     # 资源配置
-    AMP = True
     NUM_WORKERS = 2
     CACHE_RATE = 0.0       
 
@@ -88,7 +87,7 @@ def search_baseline():
         is_train=True, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        limit=2 
+        limit=1
     )
     
     train_loader_a = get_basic_loader(
@@ -99,7 +98,7 @@ def search_baseline():
         is_train=True, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        limit=2 
+        limit=1
     )
     
     val_loader = get_basic_loader(
@@ -110,7 +109,7 @@ def search_baseline():
         is_train=False, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        limit=2 
+        limit=1
     )
 
     # ================= 2. 模型与双优化器 =================
@@ -145,9 +144,6 @@ def search_baseline():
 
     loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
     dice_metric = DiceMetric(include_background=False, reduction="mean")
-    
-    # [Fix Warning] 使用 torch.amp 替代过期的 torch.cuda.amp
-    scaler = torch.amp.GradScaler('cuda') if AMP else None
 
     # ================= 3. 搜索循环 =================
     best_metric = -1
@@ -173,32 +169,28 @@ def search_baseline():
             # 阶段 A: 更新架构参数 (Alphas)
             # ------------------------------------------------
             optimizer_a.zero_grad()
-            with torch.amp.autocast('cuda', enabled=AMP): 
-                output_a = model(input_a)
-                loss_a = loss_function(output_a, label_a)
-                
-                # [Fix 核心修复: IndexKernel Error] 
-                probs_children, _ = model.dints_space.get_prob_a(child=True)
-                entropy_loss = model.dints_space.get_topology_entropy(probs_children)
-                
-                total_loss_a = loss_a + 0.001 * entropy_loss 
+            output_a = model(input_a)
+            loss_a = loss_function(output_a, label_a)
+            
+            # [Fix 核心修复: IndexKernel Error] 
+            probs_children, _ = model.dints_space.get_prob_a(child=True)
+            entropy_loss = model.dints_space.get_topology_entropy(probs_children)
+            
+            total_loss_a = loss_a + 0.001 * entropy_loss 
 
-            scaler.scale(total_loss_a).backward()
-            scaler.step(optimizer_a)
-            scaler.update()
+            total_loss_a.backward()
+            optimizer_a.step()
             loss_a_sum += total_loss_a.item()
 
             # ------------------------------------------------
             # 阶段 B: 更新权重参数 (Weights)
             # ------------------------------------------------
             optimizer_w.zero_grad()
-            with torch.amp.autocast('cuda', enabled=AMP): 
-                output_w = model(input_w)
-                loss_w = loss_function(output_w, label_w)
+            output_w = model(input_w)
+            loss_w = loss_function(output_w, label_w)
             
-            scaler.scale(loss_w).backward()
-            scaler.step(optimizer_w)
-            scaler.update()
+            loss_w.backward()
+            optimizer_w.step()
             loss_w_sum += loss_w.item()
 
         epoch_time = time.time() - epoch_start
@@ -211,9 +203,7 @@ def search_baseline():
             with torch.no_grad():
                 for val_data in val_loader:
                     val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
-                    # 验证时也使用混合精度
-                    with torch.amp.autocast('cuda', enabled=AMP):
-                        val_pred = sliding_window_inference(val_in, ROI_SIZE, 4, model)
+                    val_pred = sliding_window_inference(val_in, ROI_SIZE, 4, model)
                     
                     val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
                     val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
@@ -239,7 +229,7 @@ def search_baseline():
                         with open(save_path, "w") as f:
                             json.dump(arch_json, f, indent=4)
                         
-                        torch.save(model.state_dict(), os.path.join(MODEL_SAVE_DIR, "dints_search_best.pth"))
+                        # torch.save(model.state_dict(), os.path.join(MODEL_SAVE_DIR, "dints_search_best.pth"))
                         print(f" -> 🔥 New Best! Saved arch", end="")
                     except Exception as e:
                         print(f" -> [Err] Save Failed: {e}", end="")
