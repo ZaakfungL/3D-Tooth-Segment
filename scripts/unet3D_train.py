@@ -3,8 +3,10 @@ import os
 import glob
 import torch
 import time
-import warnings # [新增]
+import warnings
 
+# [新增] 忽略来自 MONAI/PyTorch 的特定未来警告，保持日志干净
+warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
 # --- 路径配置 ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +28,7 @@ def train_baseline():
     # ================= 配置区域 =================
     # 路径配置
     DATA_DIR = "/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # 你的 ROI 数据路径
-    MODEL_SAVE_DIR = "./models"
+    MODEL_SAVE_DIR = "./weights"
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
     # 训练超参数
@@ -159,7 +161,7 @@ def train_baseline():
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_epoch = epoch + 1
-                    save_path = os.path.join(MODEL_SAVE_DIR, "best_metric_model.pth")
+                    save_path = os.path.join(MODEL_SAVE_DIR, "best_unet3D_model.pth")
                     torch.save(model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})", end="")
         

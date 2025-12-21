@@ -1,5 +1,7 @@
 import os
 import glob
+import random 
+
 from monai.transforms import (
     Compose,
     LoadImaged,
@@ -14,35 +16,43 @@ from monai.transforms import (
     EnsureTyped,
 )
 from monai.data import CacheDataset, DataLoader, Dataset
+from monai.utils import set_determinism 
 
 def get_basic_loader(
-    data_dir=None,     # [修改] 改为可选参数
-    data_list=None,    # [新增] 支持直接传入划分好的文件列表
+    data_dir=None,     
+    data_list=None,    
     batch_size=2, 
     roi_size=(96, 96, 96), 
+    num_samples=1,
     is_train=True, 
-    num_workers=2,     # [修改] 默认为 2，防止 WSL 崩溃
-    cache_rate=0.0     # [修改] 默认为 0.0 (不缓存)，防止 OOM
+    num_workers=2,     
+    cache_rate=0.0,
+    limit=None         
 ):
     """
     基础数据加载器 (Baseline Loader)。
     支持通过 'data_list' 传入划分好的数据集，避免训练集和验证集重叠。
+    支持 'limit' 参数进行快速小样本验证。
 
     Args:
         data_dir (str, optional): 数据集根目录。如果不传 data_list，则必须传此参数（自动扫描全量）。
         data_list (list, optional): 包含 {'image': path, 'label': path} 的字典列表。
                                     如果传入此参数，将忽略 data_dir 的扫描。
-        batch_size (int): 批次大小。
+        batch_size (int): 批次大小 (即加载多少个 Volume)。
         roi_size (tuple): 训练时的 Patch 大小，默认 (96, 96, 96)。
+        num_samples (int): 每个 Volume 切多少个 Patch。
+                           实际送入网络的 Batch = batch_size * num_samples。
+                           默认为 1 (最省显存)。
         is_train (bool): 是否为训练模式。
         num_workers (int): 多进程加载数。建议在 WSL 中设为 0 或 2。
         cache_rate (float): 缓存比率 (0.0 - 1.0)。内存不足时建议设为 0.0。
+        limit (int, optional): [Debug专用] 限制加载文件的数量。例如 limit=2 只加载2个数据快速跑通流程。
     """
 
     # 1. 确定数据源
     if data_list is not None:
         # 【优先】使用传入的列表 (用于 Train/Val 划分)
-        data_dicts = data_list
+        data_dicts = list(data_list) # 复制一份，防止修改外部列表
         source_info = "传入的文件列表 (List)"
     elif data_dir is not None:
         # 【后备】自动扫描目录 (用于简单测试或全量训练)
@@ -68,11 +78,24 @@ def get_basic_loader(
     else:
         raise ValueError("错误: 必须提供 data_dir 或 data_list 其中之一！")
     
+    # [新增] 快速验证逻辑：随机截取指定数量的数据
+    if limit is not None and isinstance(limit, int):
+        if 0 < limit < len(data_dicts):
+            print(f"\n⚡ [Fast Debug] 快速验证模式开启！")
+            print(f"   原数据量: {len(data_dicts)} -> 限制为: {limit} (随机选取)")
+            # 随机打乱并截取，为了每次运行结果一致建议外部控制种子，这里简单处理
+            # 这里的 shuffle 只会影响当前的 data_dicts 副本
+            random.shuffle(data_dicts) 
+            data_dicts = data_dicts[:limit]
+            source_info += f" [已限制数量: {limit}]"
+
     print(f"\n[Dataloader] 数据加载配置:")
     print(f"  - 来源: {source_info}")
     print(f"  - 模式: {'训练 (Training)' if is_train else '验证 (Validation)'}")
     print(f"  - 数据量: {len(data_dicts)} 例")
     print(f"  - Patch 尺寸: {roi_size}")
+    print(f"  - 每个Volume采样数 (num_samples): {num_samples}")
+    print(f"  - 实际显存 Batch Size: {batch_size * (num_samples if is_train else 1)}")
     print(f"  - Workers: {num_workers}, Cache: {cache_rate}")
 
     # 2. 定义 Transforms (数据增强与预处理)
@@ -97,7 +120,7 @@ def get_basic_loader(
                 spatial_size=roi_size,
                 pos=1,
                 neg=1,
-                num_samples=2, # 每个 volumetric 数据采 2 个 patch
+                num_samples=num_samples, # [修改] 使用传入的参数
                 image_key="image",
                 image_threshold=0,
             ),
@@ -144,16 +167,31 @@ def get_basic_loader(
 
 # --- 单元测试代码 ---
 if __name__ == "__main__":
+
     # 假设你的数据在这里
     TEST_DATA_DIR = "/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI" 
     
     if os.path.exists(TEST_DATA_DIR):
         print("正在运行 DataLoader 单元测试...")
-        # 测试: 强制单进程和无缓存，确保不会崩溃
-        train_loader = get_basic_loader(data_dir=TEST_DATA_DIR, batch_size=2, is_train=True, num_workers=0, cache_rate=0.0)
+        print(">>> 测试 limit=2, num_samples=1 参数:")
+        train_loader = get_basic_loader(
+            data_dir=TEST_DATA_DIR,
+            batch_size=2,
+            roi_size=(64, 64, 64),
+            num_samples=1,
+            is_train=True,
+            num_workers=0,
+            cache_rate=0.0,
+            limit=2 
+        )
         
-        check_data = next(iter(train_loader))
-        img = check_data["image"]
-        print(f"✅ 加载成功! 图像形状: {img.shape}")
+        count = 0
+        for batch in train_loader:
+            count += 1
+            img = batch["image"]
+            print(f"  Batch {count}: Image Shape {img.shape}") 
+            # 预期: [2, 1, 64, 64, 64] (因为 batch=2 * samples=1 = 2)
+            
+        print(f"✅ 加载结束")
     else:
         print(f"提示: {TEST_DATA_DIR} 不存在，跳过测试。")
