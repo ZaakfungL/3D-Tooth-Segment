@@ -32,11 +32,11 @@ def train_baseline():
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
     # 训练超参数
-    MAX_EPOCHS = 100
+    MAX_EPOCHS = 5
     VAL_INTERVAL = 2        # 每多少个 epoch 验证一次
-    BATCH_SIZE = 2
+    BATCH_SIZE = 1
     LR = 1e-4
-    ROI_SIZE = (96, 96, 96) # Patch 大小
+    ROI_SIZE = (64, 64, 64) # Patch 大小
     
     # 显存/内存优化配置
     NUM_WORKERS = 2         # WSL建议设为2或0
@@ -74,7 +74,8 @@ def train_baseline():
         roi_size=ROI_SIZE, 
         is_train=True, 
         num_workers=NUM_WORKERS,
-        cache_rate=CACHE_RATE
+        cache_rate=CACHE_RATE,
+        limit=1
     )
     
     val_loader = get_basic_loader(
@@ -83,7 +84,8 @@ def train_baseline():
         roi_size=ROI_SIZE, 
         is_train=False, 
         num_workers=NUM_WORKERS,
-        cache_rate=CACHE_RATE
+        cache_rate=CACHE_RATE,
+        limit=1
     )
 
     # ================= 3. 模型与优化器 =================
@@ -152,7 +154,7 @@ def train_baseline():
                     best_metric = metric
                     best_metric_epoch = epoch + 1
                     save_path = os.path.join(MODEL_SAVE_DIR, "best_unet3D_model.pth")
-                    torch.save(model.state_dict(), save_path)
+                    # torch.save(model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})", end="")
         
         # 换行，为下一个 Epoch 做准备
