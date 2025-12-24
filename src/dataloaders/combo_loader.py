@@ -24,37 +24,51 @@ class NASComboDataLoader:
     迭代策略：
     - 无标签数据集 (U_W, U_A) 较大，决定 Epoch 的长度。
     - 有标签数据集 (L_W, L_A) 较小，会无限循环 (cycle) 以匹配无标签数据的步数。
+    
+    使用方式：
+    - 方式1: 传入 data_dir，自动扫描 imagesTr/labelsTr/imagesUnlabeled
+    - 方式2: 传入 labeled_list 和 unlabeled_list，使用预划分好的数据 (推荐，避免数据泄漏)
     """
     def __init__(
         self,
-        data_dir,
+        data_dir=None,           # 方式1: 自动扫描目录
+        labeled_list=None,       # 方式2: 预划分的有标签数据列表
+        unlabeled_list=None,     # 方式2: 预划分的无标签数据列表
         batch_size_l=2,
         batch_size_u=2,
         roi_size=(96, 96, 96),
         num_workers=2,
         cache_rate=0.0,
         seed=2025,
-        limit=None # Debug用
+        limit=None  # Debug用
     ):
         self.data_dir = data_dir
         self.batch_size_l = batch_size_l
         self.batch_size_u = batch_size_u
         
-        # ================= 1. 原始数据扫描 =================
+        # ================= 1. 获取数据列表 =================
         print(f"📦 初始化 NAS-TMO 组合加载器...")
         
-        # A. 扫描有标签数据
-        images_l = sorted(glob.glob(os.path.join(data_dir, "imagesTr", "*.nii.gz")))
-        labels_l = sorted(glob.glob(os.path.join(data_dir, "labelsTr", "*.nii.gz")))
-        dicts_l = [{"image": i, "label": l} for i, l in zip(images_l, labels_l)]
-        
-        # B. 扫描无标签数据
-        images_u = sorted(glob.glob(os.path.join(data_dir, "imagesUnlabeled", "*.nii.gz")))
-        if len(images_u) == 0:
-            print("⚠️ 警告: 未找到 imagesUnlabeled，将在无标签流中复用有标签数据 (伪SSL模式)")
-            dicts_u = [{"image": i, "label": i} for i in images_l] # 复用
-        else:
+        if labeled_list is not None and unlabeled_list is not None:
+            # 方式2: 使用预划分的数据列表 (推荐)
+            dicts_l = list(labeled_list)
+            dicts_u = list(unlabeled_list)
+            print(f"   使用预划分数据: 有标签 {len(dicts_l)} 例, 无标签 {len(dicts_u)} 例")
+        elif data_dir is not None:
+            # 方式1: 自动扫描目录 (兼容旧代码)
+            # A. 扫描有标签数据
+            images_l = sorted(glob.glob(os.path.join(data_dir, "imagesTr", "*.nii.gz")))
+            labels_l = sorted(glob.glob(os.path.join(data_dir, "labelsTr", "*.nii.gz")))
+            dicts_l = [{"image": i, "label": l} for i, l in zip(images_l, labels_l)]
+            
+            # B. 扫描无标签数据
+            images_u = sorted(glob.glob(os.path.join(data_dir, "imagesUnlabeled", "*.nii.gz")))
+            if len(images_u) == 0:
+                raise ValueError("❌ 未找到 imagesUnlabeled 文件夹或其中没有数据！请检查路径。")
             dicts_u = [{"image": i, "label": i} for i in images_u]
+            print(f"   自动扫描目录: 有标签 {len(dicts_l)} 例, 无标签 {len(dicts_u)} 例")
+        else:
+            raise ValueError("❌ 必须提供 data_dir 或 (labeled_list + unlabeled_list)！")
 
         # [Debug] 限制数据量
         if limit is not None:
@@ -130,6 +144,7 @@ class NASComboDataLoader:
 
 # --- 单元测试代码 ---
 if __name__ == "__main__":
+    from monai.data import partition_dataset as pd_test
     
     # 假设你的数据在这里
     TEST_DATA_DIR = "/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
@@ -139,16 +154,29 @@ if __name__ == "__main__":
         print("正在运行 NASComboDataLoader 单元测试...")
         print("=" * 60)
         
-        print("\n>>> 测试 Quad-Stream Loader (limit=4):")
+        # 模拟正确的 Train/Val 划分
+        images_l = sorted(glob.glob(os.path.join(TEST_DATA_DIR, "imagesTr", "*.nii.gz")))
+        labels_l = sorted(glob.glob(os.path.join(TEST_DATA_DIR, "labelsTr", "*.nii.gz")))
+        all_labeled = [{"image": i, "label": l} for i, l in zip(images_l, labels_l)]
+        
+        train_labeled, val_labeled = pd_test(data=all_labeled, ratios=[0.8, 0.2], shuffle=True, seed=2025)
+        print(f"\n📊 Train/Val 划分: Train {len(train_labeled)} 例 | Val {len(val_labeled)} 例")
+        
+        # 扫描无标签数据
+        images_u = sorted(glob.glob(os.path.join(TEST_DATA_DIR, "imagesUnlabeled", "*.nii.gz")))
+        all_unlabeled = [{"image": i, "label": i} for i in images_u]
+        print(f"📊 无标签数据: {len(all_unlabeled)} 例")
+        
+        print("\n>>> 测试 Quad-Stream Loader:")
         combo_loader = NASComboDataLoader(
-            data_dir=TEST_DATA_DIR,
+            labeled_list=train_labeled[:4],    # 限制数量用于测试
+            unlabeled_list=all_unlabeled[:4],
             batch_size_l=2,
             batch_size_u=2,
             roi_size=(64, 64, 64),
             num_workers=0,
             cache_rate=0.0,
-            seed=2025,
-            limit=8
+            seed=2025
         )
         
         print(f"\n📏 每个 Epoch 的步数: {len(combo_loader)}")

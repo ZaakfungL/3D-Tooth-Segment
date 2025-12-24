@@ -31,16 +31,20 @@ from src.ssl.utils import update_ema_variables, ConsistencyLoss, get_current_con
 # --- 配置 (目前为硬编码，用于验证) ---
 DATA_DIR = "/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
 LOG_DIR = "./results/dints_tmo_search"
-MAX_EPOCHS = 2
+MAX_EPOCHS = 200
 BATCH_SIZE = 2
 LR_WEIGHTS = 0.025
 LR_ARCH = 0.003
-VAL_FREQ = 1
-ARCH_START_EPOCH = 0
+VAL_FREQ = 5              # 每 5 epoch 验证
+ARCH_START_EPOCH = 10     # 前 10 epoch 只训练权重
 EMA_ALPHA = 0.99
 CONSISTENCY = 10.0
-CONSISTENCY_RAMPUP = 50.0
-ROI_SIZE = (64, 64, 64) # 根据用户要求更新为 64
+CONSISTENCY_RAMPUP = 30.0
+ROI_SIZE = (96,96,96)
+
+# --- DataLoader 配置 ---
+NUM_WORKERS = 4
+CACHE_RATE = 1          # 利用 90GB RAM
 
 def search_tmo():
     # 0. 设置
@@ -81,38 +85,58 @@ def search_tmo():
         p.detach_()
 
     # 2. 数据加载器
-    print("初始化 NASComboDataLoader (四路数据流)...")
+    print("初始化数据加载器...")
+    
+    # ===== 先划分 Train/Val，避免数据泄漏 =====
+    from monai.data import partition_dataset
+    from src.dataloaders.basic_loader import get_basic_loader
+    
+    # 扫描有标签数据
+    images_l = sorted(glob.glob(os.path.join(DATA_DIR, "imagesTr", "*.nii.gz")))
+    labels_l = sorted(glob.glob(os.path.join(DATA_DIR, "labelsTr", "*.nii.gz")))
+    all_labeled = [{"image": i, "label": l} for i, l in zip(images_l, labels_l)]
+    
+    # 划分 Train/Val (80%/20%)，保证互斥
+    train_labeled, val_labeled = partition_dataset(
+        data=all_labeled, ratios=[0.8, 0.2], shuffle=True, seed=2025
+    )
+    print(f"📊 Train/Val 划分: Train {len(train_labeled)} 例 | Val {len(val_labeled)} 例")
+    
+    # 扫描无标签数据 (不需要划分，全部用于训练)
+    images_u = sorted(glob.glob(os.path.join(DATA_DIR, "imagesUnlabeled", "*.nii.gz")))
+    all_unlabeled = [{"image": i, "label": i} for i in images_u]  # label 占位，不使用
+    
+    # ===== 控制有标签/无标签比例 =====
+    # 按 1:1 比例截取无标签数据，避免加载过多数据浪费 RAM
+    unlabeled_ratio = 1.0  # 无标签数据是有标签的多少倍 (1.0 = 1:1)
+    max_unlabeled = int(len(train_labeled) * unlabeled_ratio)
+    if len(all_unlabeled) > max_unlabeled:
+        # 随机采样，保证多样性
+        import random
+        random.seed(2025)
+        all_unlabeled = random.sample(all_unlabeled, max_unlabeled)
+    print(f"📊 无标签数据: {len(all_unlabeled)} 例 (比例 1:{unlabeled_ratio})")
+    
+    # ===== 创建 NASComboDataLoader (只用训练数据) =====
     combo_loader = NASComboDataLoader(
-        data_dir=DATA_DIR,
+        labeled_list=train_labeled,      # 传入划分好的有标签训练集
+        unlabeled_list=all_unlabeled,    # 传入全部无标签数据
         batch_size_l=BATCH_SIZE,
         batch_size_u=BATCH_SIZE,
         roi_size=ROI_SIZE,
-        limit=4 # 验证模式下限制数据量为 4
+        num_workers=NUM_WORKERS,
+        cache_rate=CACHE_RATE,
+        # limit=4  # 调试时取消注释
     )
     
-    # 验证加载器 (暂时复用 basic_loader 或创建新的)
-    # 通常应该使用 basic loader 进行验证。
-    # 复用 dints_search.py 的验证逻辑
-    from src.dataloaders.basic_loader import get_basic_loader
-    
-    # 简单的验证集创建 (为了本次测试，暂时本地拆分)
-    # 实际上 NASCombo 应该只包含训练数据。我们在本地扫描并拆分验证集。
-    # 使用有标签数据拆分出一小部分作为伪验证集。
-    images_l = sorted(glob.glob(os.path.join(DATA_DIR, "imagesTr", "*.nii.gz")))
-    labels_l = sorted(glob.glob(os.path.join(DATA_DIR, "labelsTr", "*.nii.gz")))
-    dicts_l = [{"image": i, "label": l} for i, l in zip(images_l, labels_l)]
-    
-    # 取最后 20% 作为伪验证集
-    val_split_idx = int(len(dicts_l) * 0.8)
-    val_dicts = dicts_l[val_split_idx:]
-    if len(val_dicts) == 0: val_dicts = dicts_l # 回退策略
-    
+    # ===== 创建验证加载器 =====
     val_loader = get_basic_loader(
-        data_list=val_dicts[:2], # 限制验证集大小以加快 dry run
+        data_list=val_labeled,
         batch_size=1,
         roi_size=ROI_SIZE,
         is_train=False,
-        num_workers=0
+        num_workers=NUM_WORKERS,
+        cache_rate=CACHE_RATE
     )
 
     # 3. 优化器初始化
@@ -258,3 +282,14 @@ if __name__ == "__main__":
         print(f"❌ 错误: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # 防止在算力平台上浪费钱：等待60秒后自动关机
+        print("\n⏰ 60秒后自动关机，按 Ctrl+C 取消...")
+        import time
+        import subprocess
+        try:
+            time.sleep(60)
+            print("🔌 正在关机...")
+            subprocess.run(["shutdown", "-h", "now"], check=False)
+        except KeyboardInterrupt:
+            print("❌ 关机已取消")
