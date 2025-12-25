@@ -47,7 +47,7 @@ def train_ssl():
     NUM_UNLABELED_USE = 18      # Unlabeled 数据量
     
     # 训练超参数（基于iteration）
-    MAX_ITERATIONS = 3600  # 最大迭代次数
+    MAX_ITERATIONS = 5400  # 最大迭代次数
     VAL_INTERVAL = 90      # 验证间隔
     
     LR = 1e-4
@@ -92,8 +92,9 @@ def train_ssl():
         print(f"  - 有标签数据 (Train): {len(train_labeled_files)} 例")
         print(f"  - 无标签数据 (Train): {len(unlabeled_dicts)} 例")
     else:
-        print("❌ 警告: 未找到 imagesUnlabeled 文件夹，回退到纯监督模式！")
-        unlabeled_dicts = train_labeled_files 
+        print("❌ 错误: 未找到 imagesUnlabeled 文件夹，无法进行半监督训练！")
+        print(f"   请确保目录存在: {unlabeled_dir}")
+        sys.exit(1) 
 
     # C. 创建加载器
     # 1. 有标签加载器
