@@ -147,7 +147,8 @@ def train_baseline():
         iter_time = current_time - loop_start_time
         loop_start_time = current_time # 重置时间起点
         
-        print(f"Iteration {iteration}/{MAX_ITERATIONS} | Time: {iter_time:.4f}s | Loss: {current_loss:.4f}")
+        if iteration % 10 == 0:
+            print(f"Iteration {iteration}/{MAX_ITERATIONS} | Time: {iter_time:.4f}s | Loss: {current_loss:.4f}")
 
         # --- Validation ---
         if iteration % VAL_INTERVAL == 0:
