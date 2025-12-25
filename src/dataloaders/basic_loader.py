@@ -105,7 +105,7 @@ def get_basic_loader(
             # --- 基础加载 ---
             LoadImaged(keys=["image", "label"]),
             EnsureChannelFirstd(keys=["image", "label"]),
-            Orientationd(keys=["image", "label"], axcodes="RAS"), # 统一方向
+            Orientationd(keys=["image", "label"], axcodes="RAS", labels=None), 
             
             # --- 预处理 ---
             # 1. 归一化
@@ -138,7 +138,7 @@ def get_basic_loader(
         transforms = Compose([
             LoadImaged(keys=["image", "label"]),
             EnsureChannelFirstd(keys=["image", "label"]),
-            Orientationd(keys=["image", "label"], axcodes="RAS"),
+            Orientationd(keys=["image", "label"], axcodes="RAS", labels=None),
             ScaleIntensityd(keys=["image"]),
             CropForegroundd(keys=["image", "label"], source_key="image"),
             EnsureTyped(keys=["image", "label"]),

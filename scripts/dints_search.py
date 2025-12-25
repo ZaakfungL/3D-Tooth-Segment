@@ -8,7 +8,6 @@ import numpy as np
 import time
 import warnings
 
-# [新增] 忽略来自 MONAI/PyTorch 的特定未来警告，保持日志干净
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
 
@@ -30,33 +29,48 @@ from src.dataloaders.basic_loader import get_basic_loader
 
 def search_baseline():
     # ================= 配置区域 =================
+    GPU_ID = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
+    print(f"使用GPU: {GPU_ID}")
+
     DATA_DIR = "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
     MODEL_SAVE_DIR = "./weights"
     ARCH_SAVE_DIR = "./results/dints_arch" 
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(ARCH_SAVE_DIR, exist_ok=True)
 
-    # [Debug 修改] 搜索超参数 - 快速验证模式 (Batch Iteration)
-    # Phase 1: Warm-up (仅更新权重)
+    # ============ 论文 Search 阶段参数 (严格对应) ============
+    # 论文: "We train w for the first 1k warm-up and following 10k iterations 
+    #        without updating architecture. In the following 10k iterations,
+    #        we jointly optimize w with SGD and α,pe with Adam"
+    
+    # Phase 1: Warm-up (仅更新权重, LR从0.025线性增到0.2)
     WARMUP_STEPS = 1000
     
-    # Phase 2: Stabilization (仅更新权重, 进一步稳定)
-    ARCH_SEARCH_START_STEPS = 10000
+    # Phase 2: Stabilization (仅更新权重, 共10k步)
+    # 架构搜索开始于 1k + 10k = 11k
+    ARCH_SEARCH_START_STEPS = 11000
     
-    # Phase 3: Joint Optimization (双重更新)
-    MAX_ITERATIONS = 20000
+    # Phase 3: Joint Optimization (双重更新, 共10k步)
+    # 总迭代: 1k + 10k + 10k = 21k (论文原值，对应batch=8)
+    MAX_ITERATIONS = 21000
+    EVAL_INTERVAL = 100
     
-    EVAL_INTERVAL = 10
+    # LR Decay 节点 (论文: "decays with factor 0.5 at [8k, 16k] iterations")
+    LR_DECAY_STEPS = [8000, 16000]
+    LR_DECAY_FACTOR = 0.5
     
-    BATCH_SIZE = 2
+    BATCH_SIZE = 1
+    NUM_SAMPLES = 1
     ROI_SIZE = (96, 96, 96)
     
-    # 学习率配置
-    LR_WEIGHTS = 0.025     
-    LR_ARCH = 3e-4         
+    # 学习率配置 (论文原值)
+    LR_WEIGHTS_INIT = 0.025
+    LR_WEIGHTS_MAX = 0.2
+    LR_ARCH = 0.008         
     
     # 资源配置
-    NUM_WORKERS = 4
+    NUM_WORKERS = 3
     CACHE_RATE = 1       
 
     # ================= 1. 数据准备 (双层划分) =================
@@ -88,22 +102,22 @@ def search_baseline():
         data_list=train_files_w, 
         batch_size=BATCH_SIZE, 
         roi_size=ROI_SIZE, 
-        num_samples=1,
+        num_samples=NUM_SAMPLES,
         is_train=True, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        shuffle=False
+        shuffle=True
     )
     
     train_loader_a = get_basic_loader(
         data_list=train_files_a, 
         batch_size=BATCH_SIZE, 
         roi_size=ROI_SIZE, 
-        num_samples=1,
+        num_samples=NUM_SAMPLES,
         is_train=True, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        shuffle=False
+        shuffle=True
     )
     
     val_loader = get_basic_loader(
@@ -114,15 +128,15 @@ def search_baseline():
         is_train=False, 
         num_workers=NUM_WORKERS, 
         cache_rate=CACHE_RATE,
-        shuffle=True
+        shuffle=False
     )
 
     # ================= 2. 模型与双优化器 =================
     model = DiNTSWrapper(
         in_channels=1, 
         out_channels=2, 
-        num_blocks=6,
-        num_depths=3,
+        num_blocks=12,
+        num_depths=4,
         channel_mul=1,
         use_downsample=True 
     ).to(device)
@@ -132,9 +146,9 @@ def search_baseline():
 
     optimizer_w = torch.optim.SGD(
         model.weight_parameters(), 
-        lr=LR_WEIGHTS, 
+        lr=LR_WEIGHTS_INIT,
         momentum=0.9, 
-        weight_decay=3e-4
+        weight_decay=4e-5
     )
     
     optimizer_a = torch.optim.Adam(
@@ -162,11 +176,29 @@ def search_baseline():
 
     iter_w = cycle(train_loader_w)
     iter_a = cycle(train_loader_a)
+    
+    loop_start_time = time.time()
 
     while global_step < MAX_ITERATIONS:
         global_step += 1
-        step_start = time.time()
         model.train()
+        
+        # ------------------------------------------------
+        # 学习率调度
+        # ------------------------------------------------
+        if global_step <= WARMUP_STEPS:
+            # Phase 1: Linear Warmup (0.025 -> 0.2)
+            lr = LR_WEIGHTS_INIT + (LR_WEIGHTS_MAX - LR_WEIGHTS_INIT) * (global_step / WARMUP_STEPS)
+        else:
+            # Phase 2 & 3: Step Decay
+            lr = LR_WEIGHTS_MAX
+            for decay_step in LR_DECAY_STEPS:
+                if global_step >= decay_step:
+                    lr *= LR_DECAY_FACTOR
+        
+        # 更新优化器学习率
+        for param_group in optimizer_w.param_groups:
+            param_group['lr'] = lr
         
         # 1. 获取数据
         batch_w = next(iter_w)
@@ -202,30 +234,30 @@ def search_baseline():
         
         loss_w.backward()
         optimizer_w.step()
-
-        step_time = time.time() - step_start
+        current_time = time.time()
+        step_time = current_time - loop_start_time
+        loop_start_time = current_time
+        
         status_str = "WARMUP" if global_step <= WARMUP_STEPS else \
                      ("STABLE" if global_step <= ARCH_SEARCH_START_STEPS else "SEARCH")
         
-        print(f"Step {global_step}/{MAX_ITERATIONS} [{status_str}] | Time: {step_time:.2f}s | "
-              f"Loss W: {loss_w.item():.4f} | Loss A: {loss_a_val:.4f}", end="")
+        if global_step % 10 == 0:
+            print(f"Step {global_step}/{MAX_ITERATIONS} [{status_str}] | Time: {step_time:.2f}s | "
+                  f"Loss W: {loss_w.item():.4f} | Loss A: {loss_a_val:.4f}")
 
         # --- 验证与保存 ---
         if global_step % EVAL_INTERVAL == 0:
-            # [显存优化] 验证前先释放训练时的中间变量
-            # del input_w, label_w, output_w, loss_w
-            # if global_step > ARCH_SEARCH_START_STEPS:
-            #     del input_a, label_a
-            # torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
             
             model.eval()
             with torch.no_grad():
                 for val_data in val_loader:
                     val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
-                    # [3090优化] sw_batch_size=1 最小化推理显存峰值
                     val_pred = sliding_window_inference(
-                        val_in, ROI_SIZE, sw_batch_size=1, predictor=model,
-                        overlap=0.25  # 减少重叠区域，降低计算量
+                        val_in, ROI_SIZE, 
+                        sw_batch_size=8,  # 推理显存优化
+                        predictor=model,
+                        overlap=0.5
                     )
                     
                     val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
@@ -235,11 +267,7 @@ def search_baseline():
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
             
-            # 释放验证时的显存
-            del val_in, val_lbl, val_pred, val_data
-            torch.cuda.empty_cache()
-                
-            print(f" | Val Dice: {metric:.4f}", end="")
+            print(f"Validation at Step {global_step} | Val Dice: {metric:.4f}", end="")
             
             if metric > best_metric:
                 best_metric = metric
@@ -260,7 +288,11 @@ def search_baseline():
                 except Exception as e:
                     print(f" -> [Err] Save Failed: {e}", end="")
 
-        print("") 
+            print("") 
+            
+            # [显存优化] 验证后释放显存
+            torch.cuda.empty_cache()
+            model.train() 
 
     print(f"\n搜索结束。最佳架构 Dice: {best_metric:.4f} (at Step {best_metric_step})")
 
