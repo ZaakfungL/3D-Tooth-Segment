@@ -27,7 +27,7 @@ from src.dataloaders.basic_loader import get_basic_loader
 def train_baseline():
     # ================= 配置区域 =================
     # GPU配置 - 指定使用哪张显卡
-    GPU_ID = "1"  # 修改这里选择GPU："0" 表示第一张，"1" 表示第二张
+    GPU_ID = "0"
     os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
     print(f"使用GPU: {GPU_ID}")
     
@@ -37,14 +37,18 @@ def train_baseline():
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
     # 训练超参数（基于iteration）
-    MAX_ITERATIONS = 10000  # 最大迭代次数
-    VAL_INTERVAL = 10      # 每多少个 iteration 验证一次
-    BATCH_SIZE = 2          # 训练批次大小
+    MAX_ITERATIONS = 3600  # 最大迭代次数
+    VAL_INTERVAL = 90      # 验证间隔
+    
+    # 实际送入 GPU 的 Batch Size = LOAD_BATCH_SIZE * NUM_SAMPLES
+    LOAD_BATCH_SIZE = 1     # 每次从磁盘/缓存读取多少个 Volume (降低 IO 压力)
+    NUM_SAMPLES = 32         # 每个 Volume 切多少个 Patch (提高数据利用率)
+    
     LR = 1e-4               # 学习率
     ROI_SIZE = (96, 96, 96) # Patch 大小
     
     # 显存/内存优化配置
-    NUM_WORKERS = 4         # 数据加载线程数
+    NUM_WORKERS = 3
     CACHE_RATE = 1          # 数据缓存比例（1=全部缓存）
     
     # ================= 1. 数据准备 =================
@@ -75,8 +79,9 @@ def train_baseline():
     # ================= 2. 创建加载器 =================
     train_loader = get_basic_loader(
         data_list=train_files,
-        batch_size=BATCH_SIZE, 
+        batch_size=LOAD_BATCH_SIZE, 
         roi_size=ROI_SIZE, 
+        num_samples=NUM_SAMPLES, # [新增] 启用多样本采样
         is_train=True, 
         num_workers=NUM_WORKERS,
         cache_rate=CACHE_RATE,
@@ -109,7 +114,8 @@ def train_baseline():
     
     model.train()
     train_iter = iter(train_loader)
-    start_time = time.time()
+    start_time = time.time() # 记录总开始时间
+    loop_start_time = time.time() # 记录循环开始时间
     
     while iteration < MAX_ITERATIONS:
         # 获取下一个batch，如果数据用完则重新开始
@@ -133,14 +139,21 @@ def train_baseline():
 
         epoch_loss += loss.item()
         
-        # 打印训练进度（每100个iteration打印一次）
-        if iteration % 100 == 0:
-            avg_loss = epoch_loss / step_in_epoch
-            elapsed = time.time() - start_time
-            print(f"Iteration {iteration}/{MAX_ITERATIONS} | Time: {elapsed:.1f}s | Avg Loss: {avg_loss:.4f}")
+        # 打印训练进度
+        current_loss = loss.item()
+        
+        # 计算单次迭代时间
+        current_time = time.time()
+        iter_time = current_time - loop_start_time
+        loop_start_time = current_time # 重置时间起点
+        
+        print(f"Iteration {iteration}/{MAX_ITERATIONS} | Time: {iter_time:.4f}s | Loss: {current_loss:.4f}")
 
         # --- Validation ---
         if iteration % VAL_INTERVAL == 0:
+            # [优化] 验证前清理显存，为验证阶段腾出空间
+            torch.cuda.empty_cache()
+            
             model.eval()
             with torch.no_grad():
                 for val_data in val_loader:
@@ -161,16 +174,19 @@ def train_baseline():
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
 
-                print(f"  ➜ Validation at Iter {iteration} | Val Dice: {metric:.4f}", end="")
+                print(f"Validation at Iter {iteration} | Val Dice: {metric:.4f}", end="")
 
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_iteration = iteration
                     save_path = os.path.join(MODEL_SAVE_DIR, "best_unet3D_model.pth")
-                    # torch.save(model.state_dict(), save_path)
+                    torch.save(model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})")
                 else:
                     print("")
+
+            # [优化] 验证后清理显存，释放验证阶段的大量占用，为接下来的训练腾出空间
+            torch.cuda.empty_cache()
             
             model.train()
             # 重置统计
