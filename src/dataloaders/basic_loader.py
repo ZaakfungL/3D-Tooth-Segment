@@ -27,7 +27,8 @@ def get_basic_loader(
     is_train=True, 
     num_workers=2,     
     cache_rate=0.0,
-    limit=None         
+    limit=None,
+    shuffle=None       # 新增: None 时根据 is_train 自动判断, 或显式指定 True/False
 ):
     """
     基础数据加载器 (Baseline Loader)。
@@ -155,13 +156,29 @@ def get_basic_loader(
         # 使用普通 Dataset (每次从磁盘读取，省内存)
         ds = Dataset(data=data_dicts, transform=transforms)
 
-    loader = DataLoader(
-        ds, 
-        batch_size=batch_size, 
-        shuffle=is_train, 
-        num_workers=num_workers,
-        pin_memory=True # 加速 GPU 传输
-    )
+    # 如果 shuffle 未指定，则根据 is_train 自动判断
+    should_shuffle = shuffle if shuffle is not None else is_train
+    
+    # [优化] persistent_workers + prefetch_factor 避免 epoch 边界卡顿
+    # 注意：只有 num_workers > 0 时才能使用这些参数
+    if num_workers > 0:
+        loader = DataLoader(
+            ds, 
+            batch_size=batch_size, 
+            shuffle=should_shuffle, 
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=True,   # 保持 worker 存活
+            prefetch_factor=2,         # 预取数据减少等待
+        )
+    else:
+        loader = DataLoader(
+            ds, 
+            batch_size=batch_size, 
+            shuffle=should_shuffle, 
+            num_workers=0,
+            pin_memory=True,
+        )
 
     return loader
 

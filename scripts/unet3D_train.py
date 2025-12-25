@@ -26,21 +26,26 @@ from src.dataloaders.basic_loader import get_basic_loader
 
 def train_baseline():
     # ================= 配置区域 =================
+    # GPU配置 - 指定使用哪张显卡
+    GPU_ID = "1"  # 修改这里选择GPU："0" 表示第一张，"1" 表示第二张
+    os.environ["CUDA_VISIBLE_DEVICES"] = GPU_ID
+    print(f"使用GPU: {GPU_ID}")
+    
     # 路径配置
-    DATA_DIR = "/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # 你的 ROI 数据路径
+    DATA_DIR = "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # 你的 ROI 数据路径
     MODEL_SAVE_DIR = "./weights"
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
-    # 训练超参数
-    MAX_EPOCHS = 5
-    VAL_INTERVAL = 2        # 每多少个 epoch 验证一次
-    BATCH_SIZE = 1
-    LR = 1e-4
-    ROI_SIZE = (64, 64, 64) # Patch 大小
+    # 训练超参数（基于iteration）
+    MAX_ITERATIONS = 10000  # 最大迭代次数
+    VAL_INTERVAL = 10      # 每多少个 iteration 验证一次
+    BATCH_SIZE = 2          # 训练批次大小
+    LR = 1e-4               # 学习率
+    ROI_SIZE = (96, 96, 96) # Patch 大小
     
     # 显存/内存优化配置
-    NUM_WORKERS = 2         # WSL建议设为2或0
-    CACHE_RATE = 0.0        # 设为0.0防止内存溢出
+    NUM_WORKERS = 4         # 数据加载线程数
+    CACHE_RATE = 1          # 数据缓存比例（1=全部缓存）
     
     # ================= 1. 数据准备 =================
     set_determinism(seed=2025) 
@@ -75,7 +80,6 @@ def train_baseline():
         is_train=True, 
         num_workers=NUM_WORKERS,
         cache_rate=CACHE_RATE,
-        limit=1
     )
     
     val_loader = get_basic_loader(
@@ -85,7 +89,6 @@ def train_baseline():
         is_train=False, 
         num_workers=NUM_WORKERS,
         cache_rate=CACHE_RATE,
-        limit=1
     )
 
     # ================= 3. 模型与优化器 =================
@@ -96,38 +99,48 @@ def train_baseline():
 
     # ================= 4. 训练循环 =================
     best_metric = -1
-    best_metric_epoch = -1
+    best_metric_iteration = -1
+    iteration = 0
+    epoch_loss = 0
+    step_in_epoch = 0
     
-    print(f"\n{'='*20} 开始训练 {'='*20}")
+    print(f"\n{'='*20} 开始训练 (基于Iteration) {'='*20}")
+    print(f"最大迭代次数: {MAX_ITERATIONS}, 验证间隔: {VAL_INTERVAL} iterations")
     
-    for epoch in range(MAX_EPOCHS):
-        epoch_start = time.time()
-        model.train()
-        epoch_loss = 0
-        step = 0
+    model.train()
+    train_iter = iter(train_loader)
+    start_time = time.time()
+    
+    while iteration < MAX_ITERATIONS:
+        # 获取下一个batch，如果数据用完则重新开始
+        try:
+            batch_data = next(train_iter)
+        except StopIteration:
+            train_iter = iter(train_loader)
+            batch_data = next(train_iter)
         
-        # --- Training (无 tqdm) ---
-        for batch_data in train_loader:
-            step += 1
-            inputs, labels = batch_data["image"].to(device), batch_data["label"].to(device)
-
-            optimizer.zero_grad()
-            
-            outputs = model(inputs)
-            loss = loss_function(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
+        iteration += 1
+        step_in_epoch += 1
         
-        epoch_loss /= step
-        epoch_time = time.time() - epoch_start
-        
-        # 打印训练日志
-        print(f"Epoch {epoch + 1}/{MAX_EPOCHS} | Time: {epoch_time:.1f}s | Train Loss: {epoch_loss:.4f}", end="")
+        inputs, labels_batch = batch_data["image"].to(device), batch_data["label"].to(device)
 
-        # --- Validation (无 tqdm) ---
-        if (epoch + 1) % VAL_INTERVAL == 0:
+        optimizer.zero_grad()
+        
+        outputs = model(inputs)
+        loss = loss_function(outputs, labels_batch)
+        loss.backward()
+        optimizer.step()
+
+        epoch_loss += loss.item()
+        
+        # 打印训练进度（每100个iteration打印一次）
+        if iteration % 100 == 0:
+            avg_loss = epoch_loss / step_in_epoch
+            elapsed = time.time() - start_time
+            print(f"Iteration {iteration}/{MAX_ITERATIONS} | Time: {elapsed:.1f}s | Avg Loss: {avg_loss:.4f}")
+
+        # --- Validation ---
+        if iteration % VAL_INTERVAL == 0:
             model.eval()
             with torch.no_grad():
                 for val_data in val_loader:
@@ -148,19 +161,25 @@ def train_baseline():
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
 
-                print(f" | Val Dice: {metric:.4f}", end="")
+                print(f"  ➜ Validation at Iter {iteration} | Val Dice: {metric:.4f}", end="")
 
                 if metric > best_metric:
                     best_metric = metric
-                    best_metric_epoch = epoch + 1
+                    best_metric_iteration = iteration
                     save_path = os.path.join(MODEL_SAVE_DIR, "best_unet3D_model.pth")
                     # torch.save(model.state_dict(), save_path)
-                    print(f" -> 🔥 New Best! ({best_metric:.4f})", end="")
-        
-        # 换行，为下一个 Epoch 做准备
-        print("") 
+                    print(f" -> 🔥 New Best! ({best_metric:.4f})")
+                else:
+                    print("")
+            
+            model.train()
+            # 重置统计
+            epoch_loss = 0
+            step_in_epoch = 0
 
-    print(f"\n训练结束。最佳模型 Dice: {best_metric:.4f} 于 Epoch {best_metric_epoch}")
+    total_time = time.time() - start_time
+    print(f"\n训练结束。总用时: {total_time:.1f}s")
+    print(f"最佳模型 Dice: {best_metric:.4f} 于 Iteration {best_metric_iteration}")
 
 if __name__ == "__main__":
     try:
