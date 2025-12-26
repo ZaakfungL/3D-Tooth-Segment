@@ -170,6 +170,7 @@ temp_medical_data/
 processed_data/
 model_checkpoints/
 training_logs/
+results/
 
 # PyTorch specific
 *.pth
