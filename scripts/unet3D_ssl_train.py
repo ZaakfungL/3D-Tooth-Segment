@@ -2,11 +2,9 @@ import sys
 import os
 import glob
 import torch
-import numpy as np
-import itertools
-from tqdm import tqdm
 import time
 import warnings
+import argparse
 
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
@@ -25,7 +23,7 @@ from src.models.unet3D import UNet3D
 from src.dataloaders.basic_loader import get_basic_loader
 from src.ssl.utils import update_ema_variables, get_current_consistency_weight, ConsistencyLoss
 
-def train_ssl():
+def train_ssl(seed=2025):
     # ================= 配置区域 =================
     # GPU配置 - 指定使用哪张显卡
     GPU_ID = "0"
@@ -33,7 +31,7 @@ def train_ssl():
     print(f"使用GPU: {GPU_ID}")
 
     DATA_DIR = "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
-    MODEL_SAVE_DIR = "./weights/ssl_meanteacher"
+    MODEL_SAVE_DIR = f"./weights/ssl_meanteacher_seed{seed}"
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
     LOAD_BATCH_SIZE_L = 1
@@ -47,7 +45,7 @@ def train_ssl():
     NUM_UNLABELED_USE = 18      # Unlabeled 数据量
     
     # 训练超参数（基于iteration）
-    MAX_ITERATIONS = 5400  # 最大迭代次数
+    MAX_ITERATIONS = 7200  # 最大迭代次数
     VAL_INTERVAL = 90      # 验证间隔
     
     LR = 1e-4
@@ -63,10 +61,11 @@ def train_ssl():
     CACHE_RATE = 1.0
 
     # ================= 1. 数据准备 =================
-    set_determinism(seed=2025)
+    set_determinism(seed=seed)  # [修改] 使用传入的seed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 开始 Mean Teacher 训练 | 设备: {device}")
     print(f"📌 总计 {MAX_ITERATIONS} Iterations")
+    print(f"当前随机种子: {seed}")
 
     # A. 准备有标签数据 (Labeled)
     labeled_images = sorted(glob.glob(os.path.join(DATA_DIR, "imagesTr", "*.nii.gz")))
@@ -75,7 +74,7 @@ def train_ssl():
     
     # 划分 Train/Val
     train_labeled_files, val_files = partition_dataset(
-        data=labeled_dicts, ratios=[0.8, 0.2], shuffle=True, seed=2025
+        data=labeled_dicts, ratios=[0.8, 0.2], shuffle=True, seed=seed  # [修改] 使用传入的seed
     )
 
     # B. 准备无标签数据 (Unlabeled)
@@ -255,4 +254,13 @@ def train_ssl():
     print(f"最佳模型 Dice: {best_metric:.4f} 于 Iteration {best_metric_iter}")
 
 if __name__ == "__main__":
-    train_ssl()
+    parser = argparse.ArgumentParser(description="UNet3D Mean Teacher 半监督训练脚本")
+    parser.add_argument("--seed", type=int, default=2025, help="随机种子 (默认: 2025)")
+    args = parser.parse_args()
+    
+    try:
+        train_ssl(seed=args.seed)
+    except Exception as e:
+        print(f"❌ 训练失败: {e}")
+        import traceback
+        traceback.print_exc()

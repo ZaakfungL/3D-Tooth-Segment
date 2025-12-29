@@ -4,6 +4,7 @@ import glob
 import torch
 import time
 import warnings
+import argparse
 
 # [新增] 忽略来自 MONAI/PyTorch 的特定未来警告，保持日志干净
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
@@ -24,7 +25,7 @@ from monai.transforms import AsDiscrete
 from src.models.unet3D import UNet3D
 from src.dataloaders.basic_loader import get_basic_loader
 
-def train_baseline():
+def train_baseline(seed=2025):
     # ================= 配置区域 =================
     # GPU配置 - 指定使用哪张显卡
     GPU_ID = "0"
@@ -33,7 +34,7 @@ def train_baseline():
     
     # 路径配置
     DATA_DIR = "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # 你的 ROI 数据路径
-    MODEL_SAVE_DIR = "./weights"
+    MODEL_SAVE_DIR = f"./weights/run_seed{seed}"  # [修改] 不同seed保存到不同目录
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     
     # 训练超参数（基于iteration）
@@ -52,9 +53,10 @@ def train_baseline():
     CACHE_RATE = 1          # 数据缓存比例（1=全部缓存）
     
     # ================= 1. 数据准备 =================
-    set_determinism(seed=2025) 
+    set_determinism(seed=seed)  # [修改] 使用传入的seed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
+    print(f"当前随机种子: {seed}")
 
     print("正在扫描并划分数据集...")
     images = sorted(glob.glob(os.path.join(DATA_DIR, "imagesTr", "*.nii.gz")))
@@ -69,7 +71,7 @@ def train_baseline():
         data=data_dicts, 
         ratios=[0.8, 0.2], 
         shuffle=True, 
-        seed=2025
+        seed=seed  # [修改] 使用传入的seed
     )
     
     print(f"  - 总数据量: {len(data_dicts)}")
@@ -181,7 +183,7 @@ def train_baseline():
                     best_metric = metric
                     best_metric_iteration = iteration
                     save_path = os.path.join(MODEL_SAVE_DIR, "best_unet3D_model.pth")
-                    torch.save(model.state_dict(), save_path)
+                    # torch.save(model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})")
                 else:
                     print("")
@@ -199,8 +201,12 @@ def train_baseline():
     print(f"最佳模型 Dice: {best_metric:.4f} 于 Iteration {best_metric_iteration}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="UNet3D 训练脚本")
+    parser.add_argument("--seed", type=int, default=2025, help="随机种子 (默认: 2025)")
+    args = parser.parse_args()
+    
     try:
-        train_baseline()
+        train_baseline(seed=args.seed)
     except Exception as e:
         print(f"❌ 训练发生错误: {e}")
         import traceback
