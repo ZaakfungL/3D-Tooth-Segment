@@ -1,53 +1,31 @@
-# Project Memory: 3D Tooth Segmentation (PyTorch/MONAI)
+# 项目记忆：3D牙齿分割（PyTorch/MONAI）
 
-## 1. Project Overview
-This project implements a Deep Learning framework for 3D Tooth Segmentation. It ranges from baseline methods to advanced Neural Architecture Search (NAS).
-- **Core Frameworks**: PyTorch, MONAI
-- **Task**: 3D Volumetric Segmentation (CBCT/MRI)
-- **Key Methods**: 3D U-Net, DiNTS (Differentiable Neural Network Topology Search), TMO (Topology-Aware Multi-Objective / Semi-supervised).
+## 1. 项目概述
+本项目实现了一个用于3D牙齿分割的深度学习框架，涵盖从基础方法到高级神经架构搜索（NAS）。
+- **核心框架**：PyTorch, MONAI
+- **任务**：3D体积分割（CBCT/MRI）
+- **关键方法**：3D U-Net, DiNTS（可微神经网络拓扑搜索）, TMO（拓扑感知多目标/半监督）。
 
-## 2. Environment & Config
-- **Conda Environment**: `tooth`
-- **Project Root**: `/home/lzf/Code/3D-Tooth-Segment`
-- **Dataset Path**: `/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
-  > **⚠️ Crucial**: `DATA_DIR` is **hardcoded** inside python scripts. Must verify before running.
+## 2. 环境与配置
+- **Conda环境**：`tooth`
+- **项目根目录**：`/home/lzf/Code/3D-Tooth-Segment`
+- **数据集路径**：`/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
+- **⚠️ 重要**：`DATA_DIR` 在Python脚本中是**硬编码**的，运行前必须验证。
 
-## 3. Key Scripts (Entry Points)
-All commands should be run from the Project Root.
+## 3. 关键脚本（入口点）
+所有命令应从项目根目录运行。
 
-### A. Baseline Training
-- **Script**: `scripts/unet3D_train.py`
-- **Model**: Standard `UNet3D` (src/models/unet3D.py)
-- **Input**: Labeled 3D volumes.
-- **Output**: `weights/best_unet3D_model.pth`
-- **Default Params**: 5 Epochs, Batch=1, ROI=(64,64,64).
+## 4. 代码结构
+- **`src/models/`**：
+  - `unet3D.py`：基线模型。
+  - `dints.py`：用于NAS的动态网络定义。
+- **`src/dataloaders/`**：
+  - `basic_loader.py`：标准监督加载器。
+  - `combo_loader.py`：用于SSL/TMO的复杂加载器（4流数据）。
+- **`src/ssl/`**：TMO优化器和一致性损失工具。
+- **`results/`**：存储搜索结果。
+- **`weights/`**：存储模型检查文件（`.pth`）。
 
-### B. Architecture Search (NAS)
-- **Supervised Search**: `scripts/dints_search.py`
-- **Semi-Supervised (TMO)**: `scripts/dints_tmo_search.py`
-  - **Method**: Student-Teacher model (`DiNTSWrapper`).
-  - **Loader**: `NASComboDataLoader` (Mixed Labeled/Unlabeled).
-  - **Goal**: Search for optimal topology (`arch_code`).
-  - **Output**: `results/dints_tmo_search/best_arch.json`
-
-### C. Advanced Training
-- **SSL Pre-training**: `scripts/unet3D_ssl_train.py`
-- **Retrain Searched Arch**: `scripts/dints_retrain.py` (Likely loads JSON architecture).
-
-## 4. Code Structure
-- **`src/models/`**:
-  - `unet3D.py`: Baseline model.
-  - `dints.py`: Dynamic network definition for NAS.
-- **`src/dataloaders/`**:
-  - `basic_loader.py`: Standard supervised loader.
-  - `combo_loader.py`: Complex loader for SSL/NAS (4-stream data).
-- **`src/ssl/`**: TMO optimizer and Consistency Loss utilities.
-- **`results/`**: Stores architecture search results (JSON).
-- **`weights/`**: Stores model checkpoints (`.pth`).
-
-## 5. Developer Notes
-- **VRAM Constraints**: 
-  - `dints_tmo_search.py` defaults to **Batch_Size=2**.
-  - `unet3D_train.py` defaults to **Batch_Size=1**.
-- **Determinism**: Random seeds are set to `2025` or `0` for reproducibility.
-- **Warnings**: `monai.inferers.utils` UserWarnings are suppressed in scripts.
+## 5. 开发者备注
+- **确定性**：随机种子一般设置为`2025`以确保可复现性。
+- **警告**：脚本中抑制了`monai.inferers.utils`的用户警告。

@@ -171,6 +171,7 @@ processed_data/
 model_checkpoints/
 training_logs/
 results/
+weights/
 
 # PyTorch specific
 *.pth
@@ -182,3 +183,5 @@ checkpoints/
 *.temp
 .DS_Store
 Thumbs.db
+
+*.pdf
