@@ -1,0 +1,24 @@
+# DiNTS 搜索配置
+gpu_id: "0"
+# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+model_save_dir: "./weights/dints_search_seed{seed}"
+arch_save_dir: "./results/dints_arch_seed{seed}"
+roi_size: [96, 96, 96]
+num_workers: 3
+cache_rate: 1
+
+# 搜索参数
+warmup_steps: 1000
+arch_search_start_steps: 11000
+max_iterations: 21000
+eval_interval: 100
+lr_decay_steps: [8000, 16000]
+lr_decay_factor: 0.5
+batch_size: 1
+num_samples: 1
+
+# 学习率
+lr_weights_init: 0.025
+lr_weights_max: 0.2
+lr_arch: 0.008

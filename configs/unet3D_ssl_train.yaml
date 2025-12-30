@@ -1,0 +1,27 @@
+# UNet3D Mean Teacher SSL 训练配置
+gpu_id: "0"
+# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+model_save_dir: "./weights/ssl_meanteacher_seed{seed}"
+roi_size: [96, 96, 96]
+num_workers: 3
+cache_rate: 1.0
+
+# 训练参数
+max_iterations: 7200
+val_interval: 90
+load_batch_size_l: 1
+num_samples_l: 16
+load_batch_size_u: 1
+num_samples_u: 16
+
+# 数据量控制
+num_labeled_use: 18
+num_unlabeled_use: 18
+
+# 优化器与一致性
+lr: 1.0e-4
+ema_decay: 0.99
+consistency: 0.1
+# consistency_rampup is calculated dynamically in code if not set, or set here
+# consistency_rampup: 1440

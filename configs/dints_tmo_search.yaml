@@ -1,0 +1,21 @@
+# DiNTS TMO 搜索配置
+# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+log_dir: "./results/dints_tmo_search"
+roi_size: [96, 96, 96]
+num_workers: 4
+cache_rate: 1
+
+# 训练参数
+max_epochs: 200
+batch_size: 2
+val_freq: 5
+arch_start_epoch: 10
+unlabeled_ratio: 1.0
+
+# 优化器与损失
+lr_weights: 0.025
+lr_arch: 0.003
+ema_alpha: 0.99
+consistency: 10.0
+consistency_rampup: 30.0
