@@ -127,16 +127,19 @@ class TMOAdamW(Optimizer):
                 phi_bar = phi / torch.max(phi_mean, torch.tensor(eps, device=phi.device))
 
                 # --- 论文 Algorithm 1 Line 18: Final Parameter Update ---
-                # w_t = w_{t-1} - lr * u_L - lr * (phi_bar * u_t)
-                # 这里实现了：可信方向 + 门控后的修正方向
+                # 原始论文: w_t = w_{t-1} - lr * u_t  (u_t 已融合了 g_L 和门控后的 g_U)
+                # 
+                # 注意: u_t 是基于融合后的动量计算的最终更新方向
+                # 不需要再单独加 u_L，因为 u_L 的信息已经通过动量累积到 u_t 中
                 
                 # 1. 应用 Weight Decay (Decoupled like AdamW)
                 if weight_decay > 0:
                     p.data.mul_(1 - lr * weight_decay)
 
                 # 2. 应用梯度更新
-                # update = u_L + phi_bar * u_t
-                final_update = u_L.add(u_t * phi_bar)
+                # 使用门控归一化后的 u_t 进行更新
+                # phi_bar 用于补偿因 masking 导致的更新幅度下降
+                final_update = u_t * phi_bar
                 
                 p.data.add_(final_update, alpha=-lr)
                 
