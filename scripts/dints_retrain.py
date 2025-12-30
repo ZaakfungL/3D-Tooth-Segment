@@ -131,8 +131,7 @@ def retrain_from_arch(config):
         print("使用 'arch_code_a_max' 作为架构编码")
         arch_code_a = torch.tensor(arch_code["arch_code_a_max"]).to(device)
     else:
-        print("未找到 'arch_code_a_max'，回退到 'arch_code_a'")
-        arch_code_a = torch.tensor(arch_code["arch_code_a"]).to(device)
+        raise ValueError(f"架构文件 {arch_file} 中未找到 'arch_code_a_max'。请确保使用正确的架构文件。")
 
     arch_code_c = torch.tensor(arch_code["arch_code_c"]).to(device)
 
