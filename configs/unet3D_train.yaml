@@ -1,7 +1,7 @@
 # UNet3D Baseline 训练配置
 gpu_id: "0"
-# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
-data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+# data_dir: "/data/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 414
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 708
 model_save_dir: "./weights/run_seed{seed}"
 roi_size: [96, 96, 96]
 num_workers: 3

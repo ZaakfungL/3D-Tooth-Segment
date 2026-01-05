@@ -1,21 +1,26 @@
 # DiNTS Retrain 配置
-gpu_id: "1"
-# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
-data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
+
+gpu_id: "0"
+
+# data_dir: "/data/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 414
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 708
 model_save_dir: "./weights/dints_retrain_seed{seed}"
-arch_save_dir: "./results/dints_arch"
-# [Modify] 指定具体的架构文件路径
-arch_file_path: "/home/lzf/Code/3D-Tooth-Segment/results/dints_arch_seed2027/best_arch_roi.json"
-log_dir: "./logs/dints_retrain_seed{seed}"
+
+# 指定架构文件路径 (支持 {seed} 占位符)
+arch_file_path: "./results/dints_search/seed2025/best_arch_roi.json"
 roi_size: [96, 96, 96]
-num_workers: 4
+num_workers: 3
 cache_rate: 1.0
 
 # 训练参数
 max_iterations: 7200
-val_interval: 10
+val_interval: 100
 batch_size: 1
-num_samples: 32
+num_samples: 8
+
+# 验证参数
+val_sw_batch_size: 30
+val_overlap: 0.5
 
 # 优化器
 lr_init: 0.025

@@ -1,9 +1,8 @@
 # DiNTS 搜索配置
 gpu_id: "0"
-# data_dir: "/home/ta/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
-data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"
-model_save_dir: "./weights/dints_search_seed{seed}"
-arch_save_dir: "./results/dints_arch_seed{seed}"
+# data_dir: "/data/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 414
+data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 708
+arch_save_dir: "./results/dints_search/seed{seed}"
 roi_size: [96, 96, 96]
 num_workers: 3
 cache_rate: 1
@@ -12,7 +11,10 @@ cache_rate: 1
 warmup_steps: 1000
 arch_search_start_steps: 11000
 max_iterations: 21000
-eval_interval: 100
+eval_interval: 200
+num_val_samples: 1
+val_sw_batch_size: 15
+val_overlap: 0.5
 lr_decay_steps: [8000, 16000]
 lr_decay_factor: 0.5
 batch_size: 1
