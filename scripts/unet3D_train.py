@@ -98,6 +98,9 @@ def train_baseline(config):
 
     # ================= 3. 模型与优化器 =================
     model = UNet3D(in_channels=1, out_channels=2).to(device)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"模型总参数量: {total_params:,}")
+
     loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     dice_metric = DiceMetric(include_background=False, reduction="mean")
@@ -224,3 +227,4 @@ if __name__ == "__main__":
         print(f"❌ 训练发生错误: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)

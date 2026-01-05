@@ -143,6 +143,9 @@ def train_tmo(config):
         param.detach_()
     ema_model.load_state_dict(model.state_dict())
 
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"模型总参数量: {total_params:,}")
+
     # 损失函数
     loss_supervised = DiceCELoss(to_onehot_y=True, softmax=True)
     loss_consistency = ConsistencyLoss()
