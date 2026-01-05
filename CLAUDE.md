@@ -8,12 +8,17 @@
 
 ## 2. 环境与配置
 - **Conda环境**：`tooth`
+- **Python解释器路径**（建议直接调用）：
+  - 本地：`/home/lzf/miniconda3/envs/tooth/bin/python`
 - **项目根目录**：`/home/lzf/Code/3D-Tooth-Segment`
-- **数据集路径**：`/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
+- **本地数据集路径**：`/home/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
+- **服务器414数据集路径**：`/data/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
+- **服务器708数据集路径**：`/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI`
 - **⚠️ 重要**：`DATA_DIR` 在Python脚本中是**硬编码**的，运行前必须验证。
 
-## 3. 关键脚本（入口点）
-所有命令应从项目根目录运行。
+## 3. 运行规范
+- 所有命令应从项目根目录运行。
+- 使用 `&&` 确保先激活环境再运行，若激活失败则不会执行 Python 命令
 
 ## 4. 代码结构
 - **`src/models/`**：
