@@ -22,8 +22,9 @@ from monai.utils import set_determinism
 from monai.transforms import AsDiscrete
 from monai.inferers import sliding_window_inference
 
-# 导入你的模块
-from src.models.dints import DiNTSWrapper
+# 导入 MONAI DiNTS 离散架构模块
+from monai.networks.nets import TopologyInstance, DiNTS
+
 from src.dataloaders.basic_loader import get_basic_loader
 from src.utils.config import load_config, get_config_argument_parser
 
@@ -36,21 +37,13 @@ def retrain_from_arch(config):
 
     data_dir = config["data_dir"]
     model_save_dir = config["model_save_dir"].format(seed=seed)
-    arch_save_dir = config["arch_save_dir"]
-    log_dir = config["log_dir"].format(seed=seed)
 
     os.makedirs(model_save_dir, exist_ok=True)
-    os.makedirs(arch_save_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
 
     # 1. 查找最佳架构文件
-    if "arch_file_path" in config:
-        arch_file = config["arch_file_path"]
-    else:
-        arch_file = os.path.join(arch_save_dir, "best_arch_roi.json")
-
+    arch_file = config["arch_file_path"].format(seed=seed)
     if not os.path.exists(arch_file):
-        raise FileNotFoundError(f"未找到架构文件: {arch_file}。请先运行搜索脚本 (dints_search.py) 或在配置中指定正确路径。")
+        raise FileNotFoundError(f"未找到架构文件: {arch_file}。请在配置中指定正确的 arch_file_path。")
 
     print(f"载入架构文件: {arch_file}")
     with open(arch_file, "r") as f:
@@ -70,6 +63,10 @@ def retrain_from_arch(config):
 
     num_workers = config["num_workers"]
     cache_rate = config["cache_rate"]
+
+    # 验证参数
+    val_sw_batch_size = config.get("val_sw_batch_size", 4)
+    val_overlap = config.get("val_overlap", 0.5)
 
     # ================= 1. 数据准备 =================
     set_determinism(seed=seed)
@@ -113,47 +110,46 @@ def retrain_from_arch(config):
         is_train=False,
         num_workers=num_workers,
         cache_rate=cache_rate,
-        shuffle=False
+        shuffle=True
     )
 
-    # ================= 2. 模型定义 (载入架构) =================
-    model = DiNTSWrapper(
-        in_channels=1,
-        out_channels=2,
-        num_blocks=12,
-        num_depths=3,   # [修正] JSON 只有 7 列，对应 num_depths=3 (2+3+2=7)。如果是 4 则需要 10 列。
-        channel_mul=1,
-        use_downsample=True
-    ).to(device)
-
-    # 将 list 转回 tensor
+    # ================= 2. 模型定义 (离散架构重构) =================
+    # 解析架构编码
     if "arch_code_a_max" in arch_code:
         print("使用 'arch_code_a_max' 作为架构编码")
-        arch_code_a = torch.tensor(arch_code["arch_code_a_max"]).to(device)
+        arch_code_a = np.array(arch_code["arch_code_a_max"])
     else:
         raise ValueError(f"架构文件 {arch_file} 中未找到 'arch_code_a_max'。请确保使用正确的架构文件。")
 
-    arch_code_c = torch.tensor(arch_code["arch_code_c"]).to(device)
+    arch_code_c = np.array(arch_code["arch_code_c"])
+    arch_code_list = [arch_code_a, arch_code_c]
 
-    print("配置固定架构用于 Retrain...")
+    # 使用 TopologyInstance 创建离散拓扑 (只保留被选中的操作)
+    dints_space = TopologyInstance(
+        arch_code=arch_code_list,
+        channel_mul=1.0,
+        num_blocks=12,
+        num_depths=3,
+        spatial_dims=3,
+        use_downsample=True,
+        device=device
+    )
 
-    # -----------------------------------------------------------
-    # [Patch] 强制使用固定架构
-    # -----------------------------------------------------------
-    def get_fixed_prob_a(child=False):
-        return None, arch_code_a
+    # 创建完整的 DiNTS 网络
+    model = DiNTS(
+        dints_space=dints_space,
+        in_channels=1,
+        num_classes=2,
+        use_downsample=True,
+        spatial_dims=3,
+    ).to(device)
 
-    def get_fixed_prob_c(child=False):
-        return None, arch_code_c
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"模型总参数量: {total_params:,}")
 
-    model.dints_space.get_prob_a = get_fixed_prob_a
-    model.dints_space.get_prob_c = get_fixed_prob_c
-    print("✅ 已Patch模型以使用固定架构进行训练。")
-    # -----------------------------------------------------------
-
-    # 优化器：只优化权重
+    # 优化器：优化所有参数
     optimizer = torch.optim.SGD(
-        model.weight_parameters(),
+        model.parameters(),
         lr=lr_init,
         momentum=momentum,
         weight_decay=weight_decay
@@ -212,25 +208,21 @@ def retrain_from_arch(config):
 
         # ================= 4. 验证 =================
         if global_step % val_interval == 0:
-            # 释放显存
-            torch.cuda.empty_cache()
-
             model.eval()
             with torch.no_grad():
-                for val_data in val_loader:
-                    val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
+                val_data = next(iter(val_loader))
+                val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
 
-                    # 推理也使用 sliding window
-                    val_pred = sliding_window_inference(
-                        val_in, roi_size,
-                        sw_batch_size=4,
-                        predictor=model,
-                        overlap=0.5
-                    )
+                val_pred = sliding_window_inference(
+                    val_in, roi_size,
+                    sw_batch_size=val_sw_batch_size,
+                    predictor=model,
+                    overlap=val_overlap
+                )
 
-                    val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
-                    val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
-                    dice_metric(y_pred=val_pred, y=val_lbl)
+                val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
+                val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
+                dice_metric(y_pred=val_pred, y=val_lbl)
 
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
@@ -242,15 +234,18 @@ def retrain_from_arch(config):
                     best_iter = global_step
                     save_path = os.path.join(model_save_dir, "dints_retrain_best.pth")
                     torch.save(model.state_dict(), save_path)
-                    print(f" -> 🔥 New Best! Model saved to {save_path}")
+                    print(f" -> New Best! Model saved to {save_path}")
                 else:
                     print("")
+
+                # 显式删除验证阶段的中间变量，防止显存泄漏
+                del val_data, val_in, val_lbl, val_pred
 
             # 恢复训练状态
             torch.cuda.empty_cache()
             model.train()
 
-    print(f"\n训练结束。最佳 Dice: {best_metric:.4f} (at Step {best_iter})")
+    print(f"\n训练结束。最佳模型 Dice: {best_metric:.4f} (at Step {best_iter})")
 
 if __name__ == "__main__":
     parser = get_config_argument_parser(description="DiNTS Retrain Script")

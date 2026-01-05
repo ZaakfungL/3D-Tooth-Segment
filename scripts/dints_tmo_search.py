@@ -30,6 +30,14 @@ from src.ssl.tmo import TMOAdamW
 from src.ssl.utils import update_ema_variables, ConsistencyLoss, get_current_consistency_weight
 from src.utils.config import load_config, get_config_argument_parser
 
+def cycle(iterable):
+    """
+    无限循环迭代器
+    """
+    while True:
+        for x in iterable:
+            yield x
+
 def search_tmo(config):
     # ================= 配置读取 (Fail Fast) =================
     # 基础配置
@@ -40,10 +48,10 @@ def search_tmo(config):
     cache_rate = config["cache_rate"]
 
     # 训练参数
-    max_epochs = config["max_epochs"]
+    max_iterations = config["max_iterations"]
     batch_size = config["batch_size"]
-    val_freq = config["val_freq"]
-    arch_start_epoch = config["arch_start_epoch"]
+    eval_interval = config["eval_interval"]
+    arch_search_start_steps = config["arch_search_start_steps"]
     unlabeled_ratio = config["unlabeled_ratio"]
 
     # 优化器与损失
@@ -51,7 +59,7 @@ def search_tmo(config):
     lr_arch = config["lr_arch"]
     ema_alpha = config["ema_alpha"]
     consistency = config["consistency"]
-    consistency_rampup = config["consistency_rampup"]
+    consistency_rampup_steps = config["consistency_rampup_steps"]
 
     seed = config.get("seed", 2025)
 
@@ -60,9 +68,6 @@ def search_tmo(config):
         os.makedirs(log_dir)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    set_determinism(0) # TMO script used 0 in original code, keeping it or using seed? Original used 0.
-    # Actually, let's use the seed from config if provided, or default to 0 if that's what was intended.
-    # Original code had `set_determinism(0)` hardcoded. Let's use `seed`.
     set_determinism(seed)
 
     print(f"🚀 开始 DiNTS-TMO 搜索 | 设备: {device} | Seed: {seed}")
@@ -74,7 +79,7 @@ def search_tmo(config):
     student = DiNTSWrapper(
         in_channels=1,
         out_channels=2,
-        num_blocks=6,
+        num_blocks=12,
         num_depths=3
     ).to(device)
 
@@ -82,7 +87,7 @@ def search_tmo(config):
     teacher = DiNTSWrapper(
         in_channels=1,
         out_channels=2,
-        num_blocks=6,
+        num_blocks=12,
         num_depths=3
     ).to(device)
 
@@ -91,6 +96,9 @@ def search_tmo(config):
         student.dints_space.device = device
     if hasattr(teacher, "dints_space"):
         teacher.dints_space.device = device
+
+    total_params = sum(p.numel() for p in student.parameters())
+    print(f"模型总参数量: {total_params:,}")
 
     # 分离 Teacher 参数
     for p in teacher.parameters():
@@ -140,8 +148,8 @@ def search_tmo(config):
 
     # ===== 创建 NASComboDataLoader (只用训练数据) =====
     combo_loader = NASComboDataLoader(
-        labeled_list=train_labeled,      # 传入划分好的有标签训练集
-        unlabeled_list=all_unlabeled,    # 传入全部无标签数据
+        labeled_list=train_labeled,
+        unlabeled_list=all_unlabeled,
         batch_size_l=batch_size,
         batch_size_u=batch_size,
         roi_size=roi_size,
@@ -170,144 +178,174 @@ def search_tmo(config):
     loss_consistency = ConsistencyLoss()
     dice_metric = DiceMetric(include_background=False, reduction="mean")
 
-    # --- 训练循环 ---
-    print(f"\n{'='*20} 开始搜索循环 ({max_epochs} epochs) {'='*20}")
+    # --- 训练循环 (Step-based Refactoring) ---
+    print(f"\n{'='*20} 开始搜索循环 ({max_iterations} steps) {'='*20}")
+
     global_step = 0
     best_metric = -1
 
-    for epoch in range(max_epochs):
-        epoch_start = time.time()
+    # 累积损失统计
+    loss_w_l_sum = 0
+    loss_w_u_sum = 0
+    loss_a_l_sum = 0
+    loss_a_u_sum = 0
+
+    # 获取 steps_per_epoch 仅用于日志显示的 Epoch 估算
+    steps_per_epoch = len(combo_loader)
+    log_interval_steps = steps_per_epoch # 保持每个 Epoch 长度记录一次日志的习惯
+
+    # 初始化无限迭代器
+    loader_iter = cycle(combo_loader)
+
+    epoch_start_time = time.time()
+
+    while global_step < max_iterations:
+        global_step += 1
+
         student.train()
         teacher.train()
 
-        loss_w_l_sum = 0
-        loss_w_u_sum = 0
-        loss_a_l_sum = 0
-        loss_a_u_sum = 0
-        step = 0
+        # 从无限迭代器获取数据
+        batch_data = next(loader_iter)
 
-        cons_weight = get_current_consistency_weight(epoch, max_epochs, consistency, consistency_rampup)
+        # 计算一致性权重 (注意：这里直接传入 step，需要确认 utils.py 的 get_current_consistency_weight 是否支持)
+        # 假设 src/ssl/utils.py 中的 rampup 逻辑是通用的 sigmoid_rampup(current, rampup_length)
+        # 只要 current 和 rampup_length 单位一致（都是 steps），结果就是正确的。
+        cons_weight = get_current_consistency_weight(global_step, max_iterations, consistency, consistency_rampup_steps)
 
-        for batch_data in combo_loader:
-            step += 1
-            global_step += 1
+        l_w_imgs, l_w_lbls = batch_data['l_w']['image'].to(device), batch_data['l_w']['label'].to(device)
+        u_w_imgs = batch_data['u_w']['image'].to(device)
+        l_a_imgs, l_a_lbls = batch_data['l_a']['image'].to(device), batch_data['l_a']['label'].to(device)
+        u_a_imgs = batch_data['u_a']['image'].to(device)
 
-            l_w_imgs, l_w_lbls = batch_data['l_w']['image'].to(device), batch_data['l_w']['label'].to(device)
-            u_w_imgs = batch_data['u_w']['image'].to(device)
-            l_a_imgs, l_a_lbls = batch_data['l_a']['image'].to(device), batch_data['l_a']['label'].to(device)
-            u_a_imgs = batch_data['u_a']['image'].to(device)
+        # --- 阶段 A: 优化架构参数 (Alpha) ---
+        if global_step >= arch_search_start_steps:
+            # A1. 有标签步骤 (Labeled Step)
+            optimizer_a.zero_grad()
+            outputs_l_a = student(l_a_imgs)
+            loss_a_l = loss_dice_ce(outputs_l_a, l_a_lbls)
 
-            # --- 阶段 A: 优化架构参数 (Alpha) ---
-            if epoch >= arch_start_epoch:
-                # A1. 有标签步骤 (Labeled Step)
-                optimizer_a.zero_grad()
-                outputs_l_a = student(l_a_imgs)
-                loss_a_l = loss_dice_ce(outputs_l_a, l_a_lbls)
+            # 熵损失 (可选，模仿 dints_search 的行为)
+            probs_children, _ = student.dints_space.get_prob_a(child=True)
+            entropy_loss = student.dints_space.get_topology_entropy(probs_children)
+            loss_a_l_total = loss_a_l + 0.001 * entropy_loss
 
-                # 熵损失 (可选，模仿 dints_search 的行为)
-                probs_children, _ = student.dints_space.get_prob_a(child=True)
-                entropy_loss = student.dints_space.get_topology_entropy(probs_children)
-                loss_a_l_total = loss_a_l + 0.001 * entropy_loss
+            loss_a_l_total.backward()
+            optimizer_a.step_labeled()
+            loss_a_l_sum += loss_a_l.item()
 
-                loss_a_l_total.backward()
-                optimizer_a.step_labeled()
-                loss_a_l_sum += loss_a_l.item()
+            # A2. 无标签步骤 (Unlabeled Step)
+            optimizer_a.zero_grad()
 
-                # A2. 无标签步骤 (Unlabeled Step)
-                optimizer_a.zero_grad()
-
-                # 同步 Teacher 架构
-                with torch.no_grad():
-                    teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
-                    teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
-
-                outputs_u_a = student(u_a_imgs)
-                with torch.no_grad():
-                    teacher_u_a = teacher(u_a_imgs)
-                    teacher_u_a = torch.softmax(teacher_u_a, dim=1)
-
-                student_u_a_soft = torch.softmax(outputs_u_a, dim=1)
-                loss_a_u = loss_consistency(student_u_a_soft, teacher_u_a) * cons_weight
-
-                loss_a_u.backward()
-                optimizer_a.step_unlabeled()
-                loss_a_u_sum += loss_a_u.item()
-
-            # --- 阶段 B: 优化权重参数 (Weights) ---
-            # B1. 有标签步骤 (Labeled Step)
-            optimizer_w.zero_grad()
-            outputs_l_w = student(l_w_imgs)
-            loss_w_l = loss_dice_ce(outputs_l_w, l_w_lbls)
-
-            loss_w_l.backward()
-            optimizer_w.step_labeled()
-            loss_w_l_sum += loss_w_l.item()
-
-            # B2. 无标签步骤 (Unlabeled Step)
-            optimizer_w.zero_grad()
-
-            # 同步 Teacher 架构到最新状态 (确保 Teacher 使用最新的架构参数)
+            # 同步 Teacher 架构
             with torch.no_grad():
                 teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
                 teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
 
-            outputs_u_w = student(u_w_imgs)
+            outputs_u_a = student(u_a_imgs)
             with torch.no_grad():
-                teacher_u_w = teacher(u_w_imgs)
-                teacher_u_w = torch.softmax(teacher_u_w, dim=1)
+                teacher_u_a = teacher(u_a_imgs)
+                teacher_u_a = torch.softmax(teacher_u_a, dim=1)
 
-            student_u_w_soft = torch.softmax(outputs_u_w, dim=1)
-            loss_w_u = loss_consistency(student_u_w_soft, teacher_u_w) * cons_weight
+            student_u_a_soft = torch.softmax(outputs_u_a, dim=1)
+            loss_a_u = loss_consistency(student_u_a_soft, teacher_u_a) * cons_weight
 
-            loss_w_u.backward()
-            optimizer_w.step_unlabeled()
-            loss_w_u_sum += loss_w_u.item()
+            loss_a_u.backward()
+            optimizer_a.step_unlabeled()
+            loss_a_u_sum += loss_a_u.item()
 
-            # --- 阶段 C: 维护 Teacher 模型 ---
-            # C1. EMA 更新权重参数
-            update_ema_variables(student, teacher, ema_alpha, global_step)
+        # --- 阶段 B: 优化权重参数 (Weights) ---
+        # B1. 有标签步骤 (Labeled Step)
+        optimizer_w.zero_grad()
+        outputs_l_w = student(l_w_imgs)
+        loss_w_l = loss_dice_ce(outputs_l_w, l_w_lbls)
 
-            # C2. 同步架构参数 (有两种策略，根据 Algorithm 3 第10行)
-            # 策略 A: 直接复用 Student 的最新架构 (推荐，更简单)
-            # 策略 B: 对架构参数也做 EMA (对应图片算法)
-            # 这里采用策略 A，因为架构参数变化较慢，直接同步更稳定
-            with torch.no_grad():
-                teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
-                teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
+        loss_w_l.backward()
+        optimizer_w.step_labeled()
+        loss_w_l_sum += loss_w_l.item()
 
-        # Epoch 结束日志
-        epoch_time = time.time() - epoch_start
-        print(f"Ep {epoch+1}/{max_epochs} | Time: {epoch_time:.1f}s | "
-              f"L_W(L): {loss_w_l_sum/max(step,1):.4f} L_W(U): {loss_w_u_sum/max(step,1):.4f} | "
-              f"L_A(L): {loss_a_l_sum/max(step,1):.4f} L_A(U): {loss_a_u_sum/max(step,1):.4f}", end="")
+        # B2. 无标签步骤 (Unlabeled Step)
+        optimizer_w.zero_grad()
 
-        # 验证
-        if (epoch + 1) % val_freq == 0:
-            teacher.eval() # 使用 Teacher 进行验证
-            with torch.no_grad():
-                for val_data in val_loader:
-                    val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
-                    val_pred = sliding_window_inference(val_in, roi_size, 4, teacher)
-                    val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
-                    val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
-                    dice_metric(y_pred=val_pred, y=val_lbl)
+        # 同步 Teacher 架构到最新状态 (确保 Teacher 使用最新的架构参数)
+        with torch.no_grad():
+            teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
+            teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
 
-                metric = dice_metric.aggregate().item()
-                dice_metric.reset()
+        outputs_u_w = student(u_w_imgs)
+        with torch.no_grad():
+            teacher_u_w = teacher(u_w_imgs)
+            teacher_u_w = torch.softmax(teacher_u_w, dim=1)
 
-                print(f" | Val Dice: {metric:.4f}", end="")
+        student_u_w_soft = torch.softmax(outputs_u_w, dim=1)
+        loss_w_u = loss_consistency(student_u_w_soft, teacher_u_w) * cons_weight
 
-                if metric > best_metric:
-                    best_metric = metric
-                    # 保存最佳结果
-                    topology = teacher.get_topology()
-                    arch_json = {"arch_code_a": topology[1].tolist(), "arch_code_c": topology[2].tolist()}
-                    with open(os.path.join(log_dir, "best_arch.json"), "w") as f:
-                        json.dump(arch_json, f)
-                    torch.save(teacher.state_dict(), os.path.join(log_dir, "model_best.pth"))
-                    print(f" -> 🔥 New Best!", end="")
+        loss_w_u.backward()
+        optimizer_w.step_unlabeled()
+        loss_w_u_sum += loss_w_u.item()
 
-        print("")
+        # --- 阶段 C: 维护 Teacher 模型 ---
+        # C1. EMA 更新权重参数
+        update_ema_variables(student, teacher, ema_alpha, global_step)
+
+        # C2. 同步架构参数 (有两种策略，根据 Algorithm 3 第10行)
+        # 策略 A: 直接复用 Student 的最新架构 (推荐，更简单)
+        # 策略 B: 对架构参数也做 EMA (对应图片算法)
+        # 这里采用策略 A，因为架构参数变化较慢，直接同步更稳定
+        with torch.no_grad():
+            teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
+            teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
+
+        # --- 日志记录 ---
+        if global_step % log_interval_steps == 0:
+            current_epoch_int = global_step // steps_per_epoch
+            epoch_time = time.time() - epoch_start_time
+
+            # 计算平均损失
+            avg_lw_l = loss_w_l_sum / log_interval_steps
+            avg_lw_u = loss_w_u_sum / log_interval_steps
+            avg_la_l = loss_a_l_sum / log_interval_steps
+            avg_la_u = loss_a_u_sum / log_interval_steps
+
+            print(f"Step {global_step}/{max_iterations} (Ep {current_epoch_int}) | Time: {epoch_time:.1f}s | "
+                  f"L_W(L): {avg_lw_l:.4f} L_W(U): {avg_lw_u:.4f} | "
+                  f"L_A(L): {avg_la_l:.4f} L_A(U): {avg_la_u:.4f}", end="")
+
+            # 重置计数器和计时器
+            loss_w_l_sum = 0
+            loss_w_u_sum = 0
+            loss_a_l_sum = 0
+            loss_a_u_sum = 0
+            epoch_start_time = time.time()
+
+            # --- 验证 (与日志同期，也可独立) ---
+            # 注意：eval_interval 现在是 steps 单位
+            if global_step % eval_interval == 0:
+                teacher.eval() # 使用 Teacher 进行验证
+                with torch.no_grad():
+                    for val_data in val_loader:
+                        val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
+                        val_pred = sliding_window_inference(val_in, roi_size, 4, teacher)
+                        val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
+                        val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
+                        dice_metric(y_pred=val_pred, y=val_lbl)
+
+                    metric = dice_metric.aggregate().item()
+                    dice_metric.reset()
+
+                    print(f" | Val Dice: {metric:.4f}", end="")
+
+                    if metric > best_metric:
+                        best_metric = metric
+                        # 保存最佳结果
+                        topology = teacher.get_topology()
+                        arch_json = {"arch_code_a": topology[1].tolist(), "arch_code_c": topology[2].tolist()}
+                        with open(os.path.join(log_dir, "best_arch.json"), "w") as f:
+                            json.dump(arch_json, f)
+                        torch.save(teacher.state_dict(), os.path.join(log_dir, "model_best.pth"))
+                        print(f" -> 🔥 New Best!", end="")
+
+            print("") # 换行
 
     print(f"\n搜索结束。最佳 Dice: {best_metric:.4f}")
 

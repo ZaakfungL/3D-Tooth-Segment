@@ -36,11 +36,8 @@ def search_baseline(config):
 
     # 路径配置
     data_dir = config["data_dir"]
-    # 支持 {seed} 格式化字符串
-    model_save_dir = config["model_save_dir"].format(seed=seed)
     arch_save_dir = config["arch_save_dir"].format(seed=seed)
 
-    os.makedirs(model_save_dir, exist_ok=True)
     os.makedirs(arch_save_dir, exist_ok=True)
 
     # 搜索阶段参数
@@ -48,6 +45,11 @@ def search_baseline(config):
     arch_search_start_steps = config["arch_search_start_steps"]
     max_iterations = config["max_iterations"]
     eval_interval = config["eval_interval"]
+
+    # 验证优化参数
+    num_val_samples = config.get("num_val_samples", 0)
+    val_sw_batch_size = config.get("val_sw_batch_size", 8)
+    val_overlap = config.get("val_overlap", 0.5)
 
     lr_decay_steps = config["lr_decay_steps"]
     lr_decay_factor = config["lr_decay_factor"]
@@ -137,6 +139,9 @@ def search_baseline(config):
         use_downsample=True
     ).to(device)
 
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"模型总参数量: {total_params:,}")
+
     if hasattr(model, "dints_space"):
         model.dints_space.device = device
 
@@ -164,7 +169,7 @@ def search_baseline(config):
     print(f"\n{'='*20} 开始搜索 (Steps: {max_iterations}) {'='*20}")
 
     global_step = 0
-    # 创建无限迭代器辅助函数
+    
     def cycle(iterable):
         while True:
             for x in iterable:
@@ -245,25 +250,33 @@ def search_baseline(config):
         if global_step % eval_interval == 0:
             torch.cuda.empty_cache()
 
+            val_start_time = time.time()
             model.eval()
             with torch.no_grad():
+                val_count = 0
                 for val_data in val_loader:
+                    if num_val_samples > 0 and val_count >= num_val_samples:
+                        break
+
                     val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
                     val_pred = sliding_window_inference(
                         val_in, roi_size,
-                        sw_batch_size=8,
+                        sw_batch_size=val_sw_batch_size,
                         predictor=model,
-                        overlap=0.5
+                        overlap=val_overlap
                     )
 
                     val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
                     val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
                     dice_metric(y_pred=val_pred, y=val_lbl)
 
+                    val_count += 1
+
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
 
-            print(f"Validation at Step {global_step} | Val Dice: {metric:.4f}", end="")
+            val_duration = time.time() - val_start_time
+            print(f"Validation at Step {global_step} | Time: {val_duration:.1f}s | Val Dice: {metric:.4f}", end="")
 
             if metric > best_metric:
                 best_metric = metric
@@ -290,7 +303,7 @@ def search_baseline(config):
             torch.cuda.empty_cache()
             model.train()
 
-    print(f"\n搜索结束。最佳架构 Dice: {best_metric:.4f} (at Step {best_metric_step})")
+    print(f"\n训练结束。最佳模型 Dice: {best_metric:.4f} (at Step {best_metric_step})")
 
 if __name__ == "__main__":
     parser = get_config_argument_parser(description="DiNTS Search Script")
@@ -320,3 +333,4 @@ if __name__ == "__main__":
         print(f"❌ 搜索失败: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
