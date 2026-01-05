@@ -7,6 +7,33 @@
 # 示例: ./run_multiple_experiments.sh scripts/unet3D_train.py 2025 2026 2027
 # =============================================================================
 
+taskset -pc 0-3,6-31 $$ > /dev/null
+
+if [ "$1" == "__bg_run__" ]; then
+    shift
+elif [ $# -gt 0 ] && [ -f "$1" ]; then
+
+    SCRIPT_NAME=$(basename "$1" .py)
+    TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+
+    # 日志文件名: master_run_[脚本名]_[时间].log
+    LOG_FILE="master_run_${SCRIPT_NAME}_${TIMESTAMP}.log"
+
+    echo "🚀 正在将任务提交到后台..."
+
+    # 使用 nohup 启动自身，传入特殊标志位 __bg_run__
+    nohup "$0" "__bg_run__" "$@" > "$LOG_FILE" 2>&1 &
+    PID=$!
+
+    echo "✅ 任务已成功启动！"
+    echo "🆔 PID: $PID"
+    echo "📄 主控日志: $LOG_FILE"
+    echo "💡 提示: 使用 'tail -f $LOG_FILE' 查看总体进度"
+    echo "         具体的训练日志仍在 results/${SCRIPT_NAME}/ 目录下"
+
+    exit 0
+fi
+
 # 1. 解析命令行参数
 if [ $# -eq 0 ]; then
     echo "错误: 请提供脚本路径"
@@ -53,7 +80,8 @@ SKIPPED_COUNT=0
 for seed in "${SEEDS[@]}"
 do
     # 检查是否存在该seed的成功日志
-    LOG_PATTERN="${LOG_DIR}/*seed${seed}*.log"
+    # 使用更精确的匹配模式，避免 seed2 匹配到 seed2025 的情况
+    LOG_PATTERN="${LOG_DIR}/*_seed${seed}_*.log"
     MATCHING_LOGS=($(ls $LOG_PATTERN 2>/dev/null))
     
     SKIP_THIS_SEED=false
@@ -107,10 +135,15 @@ do
     echo "--------------------------------------"
     
     # 执行 Python 脚本，传入 seed 参数
-    python -u "$SCRIPT_PATH" --seed "$seed" > "$CURRENT_LOG" 2>&1
-    
+    python -u "$SCRIPT_PATH" --seed "$seed" > "$CURRENT_LOG" 2>&1 &
+    PYTHON_PID=$!
+    echo "  🚀 Python 进程 PID: $PYTHON_PID"
+
+    wait $PYTHON_PID
+    EXIT_CODE=$?
+
     # 检查上一步是否成功执行
-    if [ $? -eq 0 ]; then
+    if [ $EXIT_CODE -eq 0 ]; then
         echo "✓ Seed ${seed} 运行成功完成 ($(date '+%H:%M:%S'))"
         
         # 提取最佳 Dice 分数（如果日志中包含）
