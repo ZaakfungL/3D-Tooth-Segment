@@ -231,17 +231,17 @@ def train_tmo(config):
         update_ema_variables(model, ema_model, ema_decay, iteration)
 
         # --- Logging ---
-        current_time = time.time()
-        iter_time = current_time - loop_start_time
-        loop_start_time = current_time
-
         if iteration % 10 == 0:
-            print(f"Iter {iteration}/{max_iterations} | Time: {iter_time:.4f}s | "
+            current_time = time.time()
+            iter_time = current_time - loop_start_time
+            loop_start_time = current_time  # 只在打印后重置
+            print(f"Iter {iteration}/{max_iterations} | Time: {iter_time:.2f}s | "
                   f"L_Sup: {l_sup.item():.4f} | L_Cons: {l_cons.item():.4f} (w={consistency_weight:.3f})")
 
         # --- Validation (使用 Teacher 评估) ---
         if iteration % val_interval == 0:
             torch.cuda.empty_cache()
+            val_start_time = time.time()
 
             ema_model.eval()
             with torch.no_grad():
@@ -254,8 +254,9 @@ def train_tmo(config):
 
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
+                val_time = time.time() - val_start_time
 
-                print(f"Validation at Iter {iteration} | Val Dice: {metric:.4f}", end="")
+                print(f"Validation at Iter {iteration} | Val Dice: {metric:.4f} | Val Time: {val_time:.2f}s", end="")
 
                 if metric > best_metric:
                     best_metric = metric

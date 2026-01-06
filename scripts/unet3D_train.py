@@ -145,18 +145,17 @@ def train_baseline(config):
         # 打印训练进度
         current_loss = loss.item()
 
-        # 计算单次迭代时间
-        current_time = time.time()
-        iter_time = current_time - loop_start_time
-        loop_start_time = current_time # 重置时间起点
-
         if iteration % 10 == 0:
-            print(f"Iteration {iteration}/{max_iterations} | Time: {iter_time:.4f}s | Loss: {current_loss:.4f}")
+            current_time = time.time()
+            iter_time = current_time - loop_start_time
+            loop_start_time = current_time  # 只在打印后重置
+            print(f"Iteration {iteration}/{max_iterations} | Time: {iter_time:.2f}s | Loss: {current_loss:.4f}")
 
         # --- Validation ---
         if iteration % val_interval == 0:
             # [优化] 验证前清理显存，为验证阶段腾出空间
             torch.cuda.empty_cache()
+            val_start_time = time.time()
 
             model.eval()
             with torch.no_grad():
@@ -177,8 +176,9 @@ def train_baseline(config):
 
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
+                val_time = time.time() - val_start_time
 
-                print(f"Validation at Iter {iteration} | Val Dice: {metric:.4f}", end="")
+                print(f"Validation at Iter {iteration} | Val Dice: {metric:.4f} | Val Time: {val_time:.2f}s", end="")
 
                 if metric > best_metric:
                     best_metric = metric
