@@ -206,28 +206,37 @@ def retrain_from_arch(config):
             loop_start_time = current_time
             print(f"Step {global_step}/{max_iterations} | Time: {step_time:.2f}s | Loss: {current_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
 
-        # ================= 4. 验证 =================
+        # ================= 4. 验证 (遍历整个验证集) =================
         if global_step % val_interval == 0:
+            # 释放梯度显存，保留模型权重和优化器状态
+            optimizer.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            val_start_time = time.time()
+
             model.eval()
             with torch.no_grad():
-                val_data = next(iter(val_loader))
-                val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
+                for val_data in val_loader:
+                    val_in, val_lbl = val_data["image"].to(device), val_data["label"].to(device)
 
-                val_pred = sliding_window_inference(
-                    val_in, roi_size,
-                    sw_batch_size=val_sw_batch_size,
-                    predictor=model,
-                    overlap=val_overlap
-                )
+                    val_pred = sliding_window_inference(
+                        val_in, roi_size,
+                        sw_batch_size=val_sw_batch_size,
+                        predictor=model,
+                        overlap=val_overlap
+                    )
 
-                val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
-                val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
-                dice_metric(y_pred=val_pred, y=val_lbl)
+                    val_pred = [AsDiscrete(argmax=True, to_onehot=2)(i) for i in decollate_batch(val_pred)]
+                    val_lbl = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_lbl)]
+                    dice_metric(y_pred=val_pred, y=val_lbl)
 
+                    del val_data, val_in, val_lbl, val_pred
+
+                # 聚合所有验证样本的平均Dice
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
+                val_time = time.time() - val_start_time
 
-                print(f"Validation at Step {global_step} | Val Dice: {metric:.4f}", end="")
+                print(f"Validation at Step {global_step} | Val Dice: {metric:.4f} | Val Time: {val_time:.2f}s", end="")
 
                 if metric > best_metric:
                     best_metric = metric
@@ -237,9 +246,6 @@ def retrain_from_arch(config):
                     print(f" -> New Best! Model saved to {save_path}")
                 else:
                     print("")
-
-                # 显式删除验证阶段的中间变量，防止显存泄漏
-                del val_data, val_in, val_lbl, val_pred
 
             # 恢复训练状态
             torch.cuda.empty_cache()

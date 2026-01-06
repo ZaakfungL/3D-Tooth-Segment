@@ -190,14 +190,14 @@ def search_tmo(config):
     loss_a_l_sum = 0
     loss_a_u_sum = 0
 
-    # 获取 steps_per_epoch 仅用于日志显示的 Epoch 估算
-    steps_per_epoch = len(combo_loader)
-    log_interval_steps = steps_per_epoch # 保持每个 Epoch 长度记录一次日志的习惯
+    # 获取日志间隔（按 combo_loader 长度）
+    steps_per_round = len(combo_loader)
+    log_interval_steps = steps_per_round
 
     # 初始化无限迭代器
     loader_iter = cycle(combo_loader)
 
-    epoch_start_time = time.time()
+    loop_start_time = time.time()
 
     while global_step < max_iterations:
         global_step += 1
@@ -213,15 +213,22 @@ def search_tmo(config):
         # 只要 current 和 rampup_length 单位一致（都是 steps），结果就是正确的。
         cons_weight = get_current_consistency_weight(global_step, max_iterations, consistency, consistency_rampup_steps)
 
-        l_w_imgs, l_w_lbls = batch_data['l_w']['image'].to(device), batch_data['l_w']['label'].to(device)
-        u_w_imgs = batch_data['u_w']['image'].to(device)
-        l_a_imgs, l_a_lbls = batch_data['l_a']['image'].to(device), batch_data['l_a']['label'].to(device)
-        u_a_imgs = batch_data['u_a']['image'].to(device)
+        # [Memory Optimization] 移除一次性全部加载到 GPU 的操作
+        # 原代码：
+        # l_w_imgs, l_w_lbls = batch_data['l_w']['image'].to(device), batch_data['l_w']['label'].to(device)
+        # u_w_imgs = batch_data['u_w']['image'].to(device)
+        # l_a_imgs, l_a_lbls = batch_data['l_a']['image'].to(device), batch_data['l_a']['label'].to(device)
+        # u_a_imgs = batch_data['u_a']['image'].to(device)
 
         # --- 阶段 A: 优化架构参数 (Alpha) ---
         if global_step >= arch_search_start_steps:
             # A1. 有标签步骤 (Labeled Step)
             optimizer_a.zero_grad()
+
+            # [Memory Optimization] 按需加载 l_a
+            l_a_imgs = batch_data['l_a']['image'].to(device)
+            l_a_lbls = batch_data['l_a']['label'].to(device)
+
             outputs_l_a = student(l_a_imgs)
             loss_a_l = loss_dice_ce(outputs_l_a, l_a_lbls)
 
@@ -234,6 +241,10 @@ def search_tmo(config):
             optimizer_a.step_labeled()
             loss_a_l_sum += loss_a_l.item()
 
+            # [Memory Optimization] 立即释放显存
+            del l_a_imgs, l_a_lbls, outputs_l_a, loss_a_l, loss_a_l_total
+            # torch.cuda.empty_cache() # 可选：如果显存非常紧张
+
             # A2. 无标签步骤 (Unlabeled Step)
             optimizer_a.zero_grad()
 
@@ -241,6 +252,9 @@ def search_tmo(config):
             with torch.no_grad():
                 teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
                 teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
+
+            # [Memory Optimization] 按需加载 u_a
+            u_a_imgs = batch_data['u_a']['image'].to(device)
 
             outputs_u_a = student(u_a_imgs)
             with torch.no_grad():
@@ -254,15 +268,26 @@ def search_tmo(config):
             optimizer_a.step_unlabeled()
             loss_a_u_sum += loss_a_u.item()
 
+            # [Memory Optimization] 立即释放显存
+            del u_a_imgs, outputs_u_a, teacher_u_a, student_u_a_soft, loss_a_u
+
         # --- 阶段 B: 优化权重参数 (Weights) ---
         # B1. 有标签步骤 (Labeled Step)
         optimizer_w.zero_grad()
+
+        # [Memory Optimization] 按需加载 l_w
+        l_w_imgs = batch_data['l_w']['image'].to(device)
+        l_w_lbls = batch_data['l_w']['label'].to(device)
+
         outputs_l_w = student(l_w_imgs)
         loss_w_l = loss_dice_ce(outputs_l_w, l_w_lbls)
 
         loss_w_l.backward()
         optimizer_w.step_labeled()
         loss_w_l_sum += loss_w_l.item()
+
+        # [Memory Optimization] 立即释放显存
+        del l_w_imgs, l_w_lbls, outputs_l_w, loss_w_l
 
         # B2. 无标签步骤 (Unlabeled Step)
         optimizer_w.zero_grad()
@@ -271,6 +296,9 @@ def search_tmo(config):
         with torch.no_grad():
             teacher.dints_space.log_alpha_a.copy_(student.dints_space.log_alpha_a)
             teacher.dints_space.log_alpha_c.copy_(student.dints_space.log_alpha_c)
+
+        # [Memory Optimization] 按需加载 u_w
+        u_w_imgs = batch_data['u_w']['image'].to(device)
 
         outputs_u_w = student(u_w_imgs)
         with torch.no_grad():
@@ -283,6 +311,10 @@ def search_tmo(config):
         loss_w_u.backward()
         optimizer_w.step_unlabeled()
         loss_w_u_sum += loss_w_u.item()
+
+        # [Memory Optimization] 立即释放显存
+        del u_w_imgs, outputs_u_w, teacher_u_w, student_u_w_soft, loss_w_u
+
 
         # --- 阶段 C: 维护 Teacher 模型 ---
         # C1. EMA 更新权重参数
@@ -298,8 +330,8 @@ def search_tmo(config):
 
         # --- 日志记录 ---
         if global_step % log_interval_steps == 0:
-            current_epoch_int = global_step // steps_per_epoch
-            epoch_time = time.time() - epoch_start_time
+            current_round = global_step // steps_per_round
+            interval_time = time.time() - loop_start_time
 
             # 计算平均损失
             avg_lw_l = loss_w_l_sum / log_interval_steps
@@ -307,7 +339,7 @@ def search_tmo(config):
             avg_la_l = loss_a_l_sum / log_interval_steps
             avg_la_u = loss_a_u_sum / log_interval_steps
 
-            print(f"Step {global_step}/{max_iterations} (Ep {current_epoch_int}) | Time: {epoch_time:.1f}s | "
+            print(f"Step {global_step}/{max_iterations} (Round {current_round}) | Time: {interval_time:.1f}s | "
                   f"L_W(L): {avg_lw_l:.4f} L_W(U): {avg_lw_u:.4f} | "
                   f"L_A(L): {avg_la_l:.4f} L_A(U): {avg_la_u:.4f}", end="")
 
@@ -316,11 +348,12 @@ def search_tmo(config):
             loss_w_u_sum = 0
             loss_a_l_sum = 0
             loss_a_u_sum = 0
-            epoch_start_time = time.time()
+            loop_start_time = time.time()
 
             # --- 验证 (与日志同期，也可独立) ---
             # 注意：eval_interval 现在是 steps 单位
             if global_step % eval_interval == 0:
+                val_start_time = time.time()
                 teacher.eval() # 使用 Teacher 进行验证
                 with torch.no_grad():
                     for val_data in val_loader:
@@ -332,8 +365,9 @@ def search_tmo(config):
 
                     metric = dice_metric.aggregate().item()
                     dice_metric.reset()
+                    val_time = time.time() - val_start_time
 
-                    print(f" | Val Dice: {metric:.4f}", end="")
+                    print(f" | Val Dice: {metric:.4f} | Val Time: {val_time:.2f}s", end="")
 
                     if metric > best_metric:
                         best_metric = metric

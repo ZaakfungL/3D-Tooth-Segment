@@ -235,14 +235,14 @@ def search_baseline(config):
 
         loss_w.backward()
         optimizer_w.step()
-        current_time = time.time()
-        step_time = current_time - loop_start_time
-        loop_start_time = current_time
 
         status_str = "WARMUP" if global_step <= warmup_steps else \
                      ("STABLE" if global_step <= arch_search_start_steps else "SEARCH")
 
         if global_step % 10 == 0:
+            current_time = time.time()
+            step_time = current_time - loop_start_time
+            loop_start_time = current_time  # 只在打印后重置
             print(f"Step {global_step}/{max_iterations} [{status_str}] | Time: {step_time:.2f}s | "
                   f"Loss W: {loss_w.item():.4f} | Loss A: {loss_a_val:.4f}")
 
