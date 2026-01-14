@@ -4,7 +4,7 @@
 本项目实现了一个用于3D牙齿分割的深度学习框架，涵盖从基础方法到高级神经架构搜索（NAS）。
 - **核心框架**：PyTorch, MONAI
 - **任务**：3D体积分割（CBCT/MRI）
-- **关键方法**：3D U-Net, DiNTS（可微神经网络拓扑搜索）, TMO（拓扑感知多目标/半监督）。
+- **关键方法**：3D U-Net, DiNTS（可微神经网络拓扑搜索）, TMO（可信任动量优化）。
 
 ## 2. 环境与配置
 - **Conda环境**：`tooth`
@@ -30,7 +30,29 @@
 - **`src/ssl/`**：TMO优化器和一致性损失工具。
 - **`results/`**：存储搜索结果。
 - **`weights/`**：存储模型检查文件（`.pth`）。
+- **`lunwen/`**：项目的论文成果，latex格式文件。
 
 ## 5. 开发者备注
 - **确定性**：随机种子一般设置为`2025`以确保可复现性。
 - **警告**：脚本中抑制了`monai.inferers.utils`的用户警告。
+
+## 6. 论文写作规范
+### 6.1 文件结构
+- **论文目录**：`/home/lzf/Code/3D-Tooth-Segment/lunwen/`
+- **主文件**：`main.tex`
+- **章节文件**：`sections/`
+  - `abstract.tex` - 摘要
+  - `intro.tex` - 引言
+  - `related.tex` - 相关工作
+  - `method.tex` - 方法
+  - `experiments.tex` - 实验
+  - `conclusion.tex` - 结论
+- **图表目录**：`figures/`
+- **参考文献**：`refs.bib`
+### 6.2 LaTeX编译
+```bash
+# 从项目根目录编译
+cd /home/lzf/Code/3D-Tooth-Segment/lunwen && xelatex main.tex && bibtex main && xelatex main.tex && xelatex main.tex
+# 清理辅助文件
+cd lunwen && rm -f *.aux *.bbl *.blg *.log *.out *.synctex.gz
+```
