@@ -1,3 +1,11 @@
+"""
+DiNTS 架构搜索脚本
+
+运行命令:
+    nohup python -u scripts/dints_search.py > results/dints/search/seed2025/search.log 2>&1 &
+    nohup python -u scripts/dints_search.py --seed 2026 > results/dints/search/seed2026/search.log 2>&1 &
+"""
+
 import sys
 import os
 import glob
@@ -36,9 +44,9 @@ def search_baseline(config):
 
     # 路径配置
     data_dir = config["data_dir"]
-    arch_save_dir = config["arch_save_dir"].format(seed=seed)
+    result_dir = config["result_dir"].format(seed=seed)
 
-    os.makedirs(arch_save_dir, exist_ok=True)
+    os.makedirs(result_dir, exist_ok=True)
 
     # 搜索阶段参数
     warmup_steps = config["warmup_steps"]
@@ -290,7 +298,7 @@ def search_baseline(config):
                         "arch_code_c": topology[2].tolist(),
                         "arch_code_a_max": topology[3].tolist()
                     }
-                    save_path = os.path.join(arch_save_dir, "best_arch_roi.json")
+                    save_path = os.path.join(result_dir, "arch.json")
                     with open(save_path, "w") as f:
                         json.dump(arch_json, f, indent=4)
 

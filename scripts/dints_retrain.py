@@ -1,3 +1,11 @@
+"""
+DiNTS 架构重训练脚本
+
+运行命令:
+    nohup python -u scripts/dints_retrain.py > results/dints/retrain/seed2025/retrain.log 2>&1 &
+    nohup python -u scripts/dints_retrain.py --seed 2026 > results/dints/retrain/seed2026/retrain.log 2>&1 &
+"""
+
 import sys
 import os
 import glob
@@ -6,7 +14,6 @@ import json
 import warnings
 import numpy as np
 import time
-import argparse
 
 # 忽略 monai 的一些警告
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
@@ -36,9 +43,9 @@ def retrain_from_arch(config):
     print(f"使用GPU: {gpu_id}")
 
     data_dir = config["data_dir"]
-    model_save_dir = config["model_save_dir"].format(seed=seed)
+    weight_dir = config["weight_dir"].format(seed=seed)
 
-    os.makedirs(model_save_dir, exist_ok=True)
+    os.makedirs(weight_dir, exist_ok=True)
 
     # 1. 查找最佳架构文件
     arch_file = config["arch_file_path"].format(seed=seed)
@@ -241,7 +248,7 @@ def retrain_from_arch(config):
                 if metric > best_metric:
                     best_metric = metric
                     best_iter = global_step
-                    save_path = os.path.join(model_save_dir, "dints_retrain_best.pth")
+                    save_path = os.path.join(weight_dir, "best.pth")
                     torch.save(model.state_dict(), save_path)
                     print(f" -> New Best! Model saved to {save_path}")
                 else:

@@ -1,26 +1,29 @@
 # DiNTS TMO 搜索配置
+gpu_id: "0"
 # data_dir: "/data/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 414
 data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 708
-log_dir: "./results/dints_tmo_search"
+
+# 输出目录 (支持 {seed} 占位符)
+result_dir: "./results/dints_tmo/search/seed{seed}"
+weight_dir: "./weights/dints_tmo/search/seed{seed}"
 roi_size: [96, 96, 96]
 num_workers: 4
 cache_rate: 1
 
 # 训练参数
-# max_epochs: 200 -> max_iterations (approx 200 epochs * 100 steps/epoch = 20000)
-max_iterations: 20000
+max_iterations: 21000
 batch_size: 1
-# val_freq: 100 (epochs) -> eval_interval (steps). 100 epochs is too infrequent for steps.
-# In dints_search it's 200 steps. Let's use 200 steps (approx 2 epochs).
-eval_interval: 200
-# arch_start_epoch: 10 -> arch_search_start_steps (approx 1000 steps)
-arch_search_start_steps: 1000
+eval_interval: 90
+arch_search_start_steps: 1100
 unlabeled_ratio: 1.0
+
+# 验证参数
+val_sw_batch_size: 30
+val_overlap: 0.5
 
 # 优化器与损失
 lr_weights: 0.025
 lr_arch: 0.003
 ema_alpha: 0.99
 consistency: 10.0
-# consistency_rampup: 30.0 (epochs) -> consistency_rampup_steps (approx 3000 steps)
 consistency_rampup_steps: 3000

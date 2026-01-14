@@ -1,4 +1,4 @@
-# DiNTS Retrain 配置
+# DiNTS TMO Retrain 配置
 
 gpu_id: "0"
 
@@ -6,19 +6,20 @@ gpu_id: "0"
 data_dir: "/home/data2/lzf/Code/dataset/nnUNet_raw/Dataset701_STS3D_ROI"  # Server 708
 
 # 输出目录 (支持 {seed} 占位符)
-weight_dir: "./weights/dints/retrain/seed{seed}"
+weight_dir: "./weights/dints_tmo/retrain/seed{seed}"
 
 # 指定架构文件路径 (支持 {seed} 占位符)
-arch_file_path: "./results/dints/search/seed{seed}/arch.json"
+arch_file_path: "./results/dints_tmo/search/seed{seed}/arch.json"
 roi_size: [96, 96, 96]
-num_workers: 3
+num_workers: 4
 cache_rate: 1.0
 
 # 训练参数
-max_iterations: 7200
+max_iterations: 10000
 val_interval: 100
 batch_size: 1
 num_samples: 8
+unlabeled_ratio: 1.0
 
 # 验证参数
 val_sw_batch_size: 30
@@ -28,3 +29,8 @@ val_overlap: 0.5
 lr_init: 0.025
 momentum: 0.9
 weight_decay: 4.0e-5
+
+# TMO 参数
+ema_alpha: 0.99
+consistency: 10.0
+consistency_rampup_steps: 1000
