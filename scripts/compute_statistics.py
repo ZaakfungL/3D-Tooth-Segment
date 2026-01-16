@@ -25,9 +25,9 @@ def extract_dice_from_log(log_file):
         print(f"警告: 无法从 {log_file} 提取数据: {e}")
     return None
 
-def extract_seed_from_filename(filename):
-    """从文件名中提取seed"""
-    match = re.search(r'seed(\d+)', filename)
+def extract_seed_from_filepath(filepath):
+    """从文件路径中提取seed（支持从目录名或文件名提取）"""
+    match = re.search(r'seed(\d+)', filepath)
     if match:
         return int(match.group(1))
     return None
@@ -44,8 +44,8 @@ def main():
         print(f"错误: 目录不存在: {log_dir}")
         sys.exit(1)
     
-    # 查找所有日志文件
-    log_files = glob.glob(os.path.join(log_dir, "*seed*.log"))
+    # 查找所有日志文件（递归搜索子目录）
+    log_files = glob.glob(os.path.join(log_dir, "**", "*.log"), recursive=True)
     
     if not log_files:
         print(f"错误: 在 {log_dir} 中未找到日志文件")
@@ -60,7 +60,7 @@ def main():
     results = {}
     
     for log_file in sorted(log_files):
-        seed = extract_seed_from_filename(os.path.basename(log_file))
+        seed = extract_seed_from_filepath(log_file)
         dice = extract_dice_from_log(log_file)
         
         if seed is not None and dice is not None:

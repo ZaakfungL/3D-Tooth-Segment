@@ -12,7 +12,6 @@ from monai.transforms import (
     RandCropByPosNegLabeld,
     RandRotate90d,
     RandFlipd,
-    RandShiftIntensityd,
     EnsureTyped,
 )
 from monai.data import CacheDataset, DataLoader, Dataset
@@ -126,11 +125,11 @@ def get_basic_loader(
                 image_threshold=0,
             ),
             
-            # --- 数据增强 ---
+            # --- 数据增强 (与 nnUNetTrainerMinimalDA 对齐) ---
             RandRotate90d(keys=["image", "label"], prob=0.1, spatial_axes=[0, 2]),
             RandFlipd(keys=["image", "label"], prob=0.1, spatial_axis=0),
-            RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.1),
-            
+            # RandShiftIntensityd 已移除，以实现公平对比
+
             EnsureTyped(keys=["image", "label"]),
         ])
     else:
