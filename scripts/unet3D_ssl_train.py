@@ -4,7 +4,6 @@ import glob
 import torch
 import time
 import warnings
-import argparse
 
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
@@ -32,7 +31,7 @@ def train_ssl(config):
     print(f"使用GPU: {gpu_id}")
 
     data_dir = config["data_dir"]
-    model_save_dir = config["model_save_dir"].format(seed=seed)
+    model_save_dir = config["model_save_dir"]
     os.makedirs(model_save_dir, exist_ok=True)
 
     load_batch_size_l = config["load_batch_size_l"]
@@ -242,7 +241,7 @@ def train_ssl(config):
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_iter = iteration
-                    save_path = os.path.join(model_save_dir, "best_unet3D_ssl_model.pth")
+                    save_path = os.path.join(model_save_dir, f"best_model_{seed}.pth")
                     # torch.save(ema_model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})")
                 else:

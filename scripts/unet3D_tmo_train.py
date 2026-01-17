@@ -4,7 +4,6 @@ import glob
 import torch
 import time
 import warnings
-import argparse
 
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
@@ -35,7 +34,7 @@ def train_tmo(config):
     print(f"使用GPU: {gpu_id}")
 
     data_dir = config["data_dir"]
-    model_save_dir = config["model_save_dir"].format(seed=seed)
+    model_save_dir = config["model_save_dir"]
     os.makedirs(model_save_dir, exist_ok=True)
 
     load_batch_size_l = config["load_batch_size_l"]

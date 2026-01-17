@@ -4,7 +4,6 @@ import glob
 import torch
 import time
 import warnings
-import argparse
 
 # [新增] 忽略来自 MONAI/PyTorch 的特定未来警告，保持日志干净
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
@@ -34,7 +33,7 @@ def train_baseline(config):
     print(f"使用GPU: {gpu_id}")
 
     data_dir = config["data_dir"]
-    model_save_dir = config["model_save_dir"].format(seed=seed)
+    model_save_dir = config["model_save_dir"]
     os.makedirs(model_save_dir, exist_ok=True)
 
     # 训练超参数（基于iteration）
@@ -183,7 +182,7 @@ def train_baseline(config):
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_iteration = iteration
-                    save_path = os.path.join(model_save_dir, "best_unet3D_model.pth")
+                    save_path = os.path.join(model_save_dir, f"best_model_{seed}.pth")
                     # torch.save(model.state_dict(), save_path)
                     print(f" -> 🔥 New Best! ({best_metric:.4f})")
                 else:

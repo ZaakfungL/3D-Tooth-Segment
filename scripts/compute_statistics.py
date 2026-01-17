@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 从实验日志中提取结果并计算统计数据（均值±标准差）
-用法: python scripts/compute_statistics.py results/unet3D_train
+用法: python scripts/compute_statistics.py results/unet3D
 """
 
 import sys
@@ -26,10 +26,23 @@ def extract_dice_from_log(log_file):
     return None
 
 def extract_seed_from_filepath(filepath):
-    """从文件路径中提取seed（支持从目录名或文件名提取）"""
-    match = re.search(r'seed(\d+)', filepath)
+    """从文件路径中提取seed（支持从目录名或文件名提取）
+
+    支持的格式:
+    - seed2025, seed_2025 (显式seed前缀)
+    - attention_unet_2025.log (文件名末尾的数字)
+    """
+    # 优先匹配显式seed前缀
+    match = re.search(r'seed_?(\d+)', filepath)
     if match:
         return int(match.group(1))
+
+    # 尝试匹配文件名末尾的数字（如 xxx_2025.log）
+    basename = os.path.basename(filepath)
+    match = re.search(r'_(\d+)\.log$', basename)
+    if match:
+        return int(match.group(1))
+
     return None
 
 def main():

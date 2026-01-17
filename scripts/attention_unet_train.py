@@ -4,7 +4,6 @@ import glob
 import torch
 import time
 import warnings
-import argparse
 
 warnings.filterwarnings("ignore", category=UserWarning, module="monai.inferers.utils")
 
@@ -32,7 +31,7 @@ def train_attention_unet(config):
     print(f"使用GPU: {gpu_id}")
 
     data_dir = config["data_dir"]
-    model_save_dir = config["model_save_dir"].format(seed=seed)
+    model_save_dir = config["model_save_dir"]
     os.makedirs(model_save_dir, exist_ok=True)
 
     max_iterations = config["max_iterations"]
@@ -148,6 +147,8 @@ def train_attention_unet(config):
 
         # --- Validation ---
         if iteration % val_interval == 0:
+            # 释放训练阶段的中间变量
+            del inputs, labels_batch, outputs, loss
             torch.cuda.empty_cache()
             val_start_time = time.time()
 
@@ -159,7 +160,7 @@ def train_attention_unet(config):
                     val_outputs = sliding_window_inference(
                         inputs=val_inputs,
                         roi_size=roi_size,
-                        sw_batch_size=4,
+                        sw_batch_size=16,
                         predictor=model
                     )
 
@@ -167,6 +168,8 @@ def train_attention_unet(config):
                     val_labels = [AsDiscrete(to_onehot=2)(i) for i in decollate_batch(val_labels)]
 
                     dice_metric(y_pred=val_outputs, y=val_labels)
+
+                    del val_inputs, val_labels, val_outputs
 
                 metric = dice_metric.aggregate().item()
                 dice_metric.reset()
@@ -177,7 +180,7 @@ def train_attention_unet(config):
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_iteration = iteration
-                    save_path = os.path.join(model_save_dir, "best_attention_unet_model.pth")
+                    save_path = os.path.join(model_save_dir, f"best_model_{seed}.pth")
                     torch.save(model.state_dict(), save_path)
                     print(f" -> New Best! ({best_metric:.4f})")
                 else:
